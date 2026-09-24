@@ -62,7 +62,7 @@ bunx @panda-ai/anyremote revoke --base-url https://your-anyremote-domain
 
 ## Develop and test
 
-Run these commands from the repository root. They install the CLI and shared protocol contracts from this repository's Bun workspace.
+Run these commands from the root of a standalone clone of this repository. They install the CLI and shared protocol contracts from its Bun workspace. When you work in the submodule inside the AnyRemote parent checkout, use the parent repository's workspace commands. Run the tarball command below from a standalone CLI clone.
 
 ```sh
 bun install --frozen-lockfile
