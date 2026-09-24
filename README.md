@@ -4,93 +4,65 @@
   <img src="https://preview.anyremote.dev/anyremote-app-icon.svg" alt="AnyRemote" width="112" height="112" />
 </p>
 
-更新：2026-09-24；维护：Codex。
+Updated September 24, 2026. Editor: Codex.
 
-AnyRemote 本地连接器。它在目标电脑上运行，接收云端 MCP 请求并通过 Node.js 标准文件与进程 API 执行操作。
+The AnyRemote CLI runs on a computer you want to control. It receives MCP requests from AnyRemote and uses Node.js file and process APIs on that computer.
 
-运行时要求 Bun，或 Node.js `>=20.9.0`。需要使用 Node.js 运行包时，请先检查
-`node --version`；低于此版本的 Node 不受当前图像处理依赖支持。
+## Requirements
 
-开发版本一条命令接入（先启动本地应用）：
+Run the published CLI with Node.js `>=20.9.0`. The repository's development scripts use Bun `1.3.11`.
+
+## Start a remote session
+
+Start the local AnyRemote app, then run this command from the repository root:
 
 ```sh
 bun run src/bin.js remote --base-url http://localhost:5173
 ```
 
-命令打开浏览器，登录后确认授权，随后持续连接本机。浏览器无法打开时使用终端
-显示的 URL 与批准码，也可加 `--no-browser`。同一 Origin 必须与应用配置一致。
-仅设备凭据保存在配置文件中，不保存本次授权的账号会话或 enrollment token。
-每次显式运行 `remote` 都会打开浏览器并要求一次新的设备授权。若本机保存的设备
-仍然有效，授权后复用原设备 ID 和控制台名称，只轮换设备凭据；设备已撤销或删除
-时会在同一轮授权中登记替代设备。`connect` 才是使用已保存凭据直接连接的命令。
-Ctrl+C、SIGTERM 或设备撤销会断开连接并停止本 CLI 管理的进程任务；短暂断网重连
-保留任务，不重新授权、不重新执行请求。本命令不是后台服务，也不提供开机自启。
-独立配置可使用
-`ANYREMOTE_CONFIG_DIR`。
+The CLI opens a browser so you can sign in and approve the device. If it cannot open a browser, visit the URL and enter the approval code printed in the terminal. Add `--no-browser` to skip the automatic browser launch. The CLI and app must use the same origin.
 
-新设备默认使用系统电脑名称：macOS 读取 ComputerName，Linux 尝试 pretty
-hostname，Windows 使用主机名；读取失败回退到主机名，再回退到平台通用名称。
-可使用 `--name '工作电脑'` 指定名称（1–120字符，不能只有空白或包含控制字符）。
-自动名称保留 Unicode，过滤控制字符并限制长度。`remote` 与 `pair` 使用相同规则。
-重新授权同一设备不会更新名称，即使提供新的 `--name`；请在控制台明确重命名。
+The `remote` flow saves device credentials. It does not save the browser authorization session or enrollment token. Each time you start `remote`, the CLI asks you to authorize the device again. If the saved device is still active, the CLI keeps its device ID and dashboard name and rotates its device token. If the device was revoked or deleted, the CLI registers a replacement during the same authorization flow.
 
-公共包发布后可用下列任一包管理器启动 `remote`（将域名替换为你的 AnyRemote
-服务地址）：
+Use `connect` to connect with saved device credentials. Both commands reconnect after a temporary network failure without asking you to authorize again or replaying a request. Press Ctrl+C, send SIGTERM, or revoke the device to disconnect. The CLI also stops process tasks that it started. It does not install a background service or configure startup at login.
+
+## Device names
+
+The CLI chooses a device name from the operating system. On macOS it reads ComputerName. On Linux it tries the pretty hostname. On Windows it uses the host name. If a lookup fails, the CLI falls back to the host name and then a platform default.
+
+Pass `--name 'Work computer'` to choose a name. Names must contain 1 to 120 characters, cannot be blank, and cannot include control characters. Automatic names keep Unicode characters, remove control characters, and stay within the length limit. The `remote` and `pair` commands use the same rules.
+
+Reauthorizing an existing device does not change its name, even when you pass a different `--name`. Rename it in the dashboard.
+
+## Run the published package
+
+After you publish the package, use one of these commands to start `remote`. Replace the example address with your AnyRemote service URL.
 
 ```sh
 # Bun
-bunx @panda-ai/anyremote remote --base-url https://你的应用域名
+bunx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
 # npm
-npx @panda-ai/anyremote remote --base-url https://你的应用域名
+npx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
 # pnpm
-pnpm dlx @panda-ai/anyremote remote --base-url https://你的应用域名
+pnpm dlx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
 # Yarn
-yarn dlx @panda-ai/anyremote remote --base-url https://你的应用域名
+yarn dlx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
 ```
 
-四种命令都调用同一个已发布的 `@panda-ai/anyremote` 包；请选择本机已安装的包
-管理器。仓库内的 `bun run --cwd` 命令仅用于本地验证，不能将未发布的包当成可安装
-版本。
-
-以下为已有的分步流程（需要已发布包或已安装的本地包）：
+You can also use these commands with a published package:
 
 ```sh
 bunx @panda-ai/anyremote doctor
-bunx @panda-ai/anyremote login --base-url https://example.com --email you@example.com --password 'your-password'
-bunx @panda-ai/anyremote pair --base-url https://example.com --token "$ANYREMOTE_TOKEN" --wait
-bunx @panda-ai/anyremote connect --base-url https://example.com --token "$ANYREMOTE_TOKEN"
-bunx @panda-ai/anyremote logout --base-url https://example.com
-bunx @panda-ai/anyremote revoke --base-url https://example.com
+bunx @panda-ai/anyremote login --base-url https://your-anyremote-domain --email you@example.com --password 'your-password'
+bunx @panda-ai/anyremote pair --base-url https://your-anyremote-domain --token "$ANYREMOTE_TOKEN" --wait
+bunx @panda-ai/anyremote connect --base-url https://your-anyremote-domain --token "$ANYREMOTE_TOKEN"
+bunx @panda-ai/anyremote logout --base-url https://your-anyremote-domain
+bunx @panda-ai/anyremote revoke --base-url https://your-anyremote-domain
 ```
 
-开发时也可以直接使用未发布的 workspace 版本：
+## Develop and test
 
-```sh
-bun run src/bin.js doctor
-bun pm pack --destination artifacts
-bun install --global ./artifacts/panda-ai-anyremote-0.2.1.tgz
-```
-
-`login` 也读取 `ANYREMOTE_EMAIL` 和 `ANYREMOTE_PASSWORD`；`pair`、`connect` 和
-账号管理命令读取 `ANYREMOTE_URL`、`ANYREMOTE_TOKEN`。登录会话保存在本机配置目录。
-ChatGPT 网页连接 `/mcp` 时在 ChatGPT 中完成 OAuth 授权，不使用 CLI 账号令牌。
-
-`logout` 只结束当前账号会话，不会撤销设备；它会清除本机保存的账号凭证，已失效
-的会话也会按成功处理，网络或服务端错误则保留凭证以便重试。`revoke` 撤销保存的
-设备并清除本机设备凭证，要求账号会话或 `ANYREMOTE_TOKEN`；没有保存设备时是成功的
-幂等空操作。旧命令 `disconnect` 仍可作为 `revoke` 的兼容别名。撤销后如需再次连接，
-重新运行 `remote` 完成设备授权即可。
-
-`pair` 返回的配对码需要在 AnyRemote 控制台批准。`connect` 只主动建立 WSS；网络中断不会自动重新执行已经派发的副作用请求。
-
-设备收到工具调用后，CLI 仅在 stderr 输出时间、request ID、工具名、状态和耗时。
-参数、路径、文件内容、命令、环境变量、结果、token 与授权码不会写入日志；stdout
-仍只用于命令输出。
-
-## 开发与测试
-
-此 repository 独立维护 CLI 与共享协议契约。需要 Bun 1.3.11 和 Node.js 20.9 或更新版本；
-从仓库根目录运行：
+Run these commands from the repository root. They install the CLI and shared protocol contracts from this repository's Bun workspace.
 
 ```sh
 bun install --frozen-lockfile
@@ -100,18 +72,29 @@ bun run test
 bun run build
 ```
 
-`bun run test` 会运行 CLI 与 `packages/contracts` 的测试。CLI 以 MIT 授权发布；父项目
-通过 `packages/cli` Git submodule 固定使用的 CLI commit。
+`bun run test` runs the CLI tests and the contract tests in `packages/contracts`. The build writes the CLI entry points to `dist/`.
 
-### 截图视觉回传
+To run the source version against a local AnyRemote app, use the `remote` command shown above. To create and install a package tarball, run:
 
-远程工具 `screen.capture` 捕获目标电脑的默认桌面，并在同一次 MCP 调用结果中
-返回文字摘要和标准 PNG 图片 content block。截图在目标电脑本地处理；PNG 经缩放与
-调色板压缩后不超过 1 MiB，结果只在现有设备请求记录中保留 60 秒。CLI 不上传
-第三方图床，也不会把临时文件路径放进响应或诊断日志。
+```sh
+bun pm pack --destination artifacts
+bun install --global ./artifacts/panda-ai-anyremote-0.2.1.tgz
+```
 
-macOS 首次使用时需允许当前终端进行“屏幕与系统录音”访问。Linux 需要至少安装
-`grim`（Wayland）、`gnome-screenshot` 或 `scrot`（X11）；Windows 使用系统
-PowerShell 截取主显示器。没有桌面会话、权限被拒绝、图片无法压缩到限制内时，工具会
-返回结构化错误。服务器支持 MCP image block 不代表每个客户端界面都必定显示图片；
-请以你所用 MCP 客户端的实际展示能力为准。
+The CLI repository includes the shared protocol contracts and uses the MIT License. The parent AnyRemote repository pins its CLI version through a Git submodule.
+
+`login` also reads `ANYREMOTE_EMAIL` and `ANYREMOTE_PASSWORD`. The `pair`, `connect`, and account-management commands read `ANYREMOTE_URL` and `ANYREMOTE_TOKEN`. The CLI stores account sessions in the local config directory. Set `ANYREMOTE_CONFIG_DIR` to use a separate config directory. ChatGPT uses its own OAuth flow when it connects to `/mcp`; it does not use the CLI account token.
+
+The `logout` command ends the account session and keeps the device connection. It clears saved account credentials, including a session that has already expired. It keeps the credentials when a network or server error prevents logout. The `revoke` command revokes the saved device and clears its local credentials. It requires an account session or `ANYREMOTE_TOKEN`. The older `disconnect` command remains an alias for `revoke`. If no device is saved, `revoke` succeeds without making a request. The dashboard must approve a pairing code before `pair` can connect.
+
+## Request logs
+
+The CLI writes request time, request ID, tool name, status, and duration to stderr. It does not log request arguments, paths, file contents, commands, environment variables, results, tokens, or approval codes. Stdout remains available for command output.
+
+## Screen capture
+
+The `screen.capture` tool captures the primary desktop on the target computer. It returns a text summary and a PNG image in the same MCP response. The CLI scales and compresses the image to no more than 1 MiB. The Worker retains the result in the existing device request record for 60 seconds. The CLI does not upload the image to a third-party image host or include a temporary file path in the response or diagnostic log.
+
+On macOS, allow the terminal app to record the screen the first time you use this tool. On Linux, install `grim`, `gnome-screenshot`, or `scrot`. On Windows, the CLI uses PowerShell to capture the primary display.
+
+The tool returns a structured error if there is no desktop session, the operating system denies permission, or the image cannot be compressed below the size limit. An MCP client may support image blocks without displaying them in its interface. Check the behavior of your MCP client.
