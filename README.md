@@ -4,7 +4,7 @@
   <img src="https://preview.anyremote.dev/anyremote-app-icon.svg" alt="AnyRemote" width="112" height="112" />
 </p>
 
-Updated September 24, 2026. Editor: Codex.
+Updated September 25, 2026. Editor: Codex.
 
 The AnyRemote CLI runs on a computer you want to control. It receives MCP requests from AnyRemote and uses Node.js file and process APIs on that computer.
 
@@ -17,10 +17,10 @@ Run the published CLI with Node.js `>=20.9.0`. The repository's development scri
 Start the local AnyRemote app, then run this command from the repository root:
 
 ```sh
-bun run src/bin.js remote --base-url http://localhost:5173
+bun run src/bin.js --base-url http://localhost:5173
 ```
 
-The CLI opens a browser so you can sign in and approve the device. If it cannot open a browser, visit the URL and enter the approval code printed in the terminal. Add `--no-browser` to skip the automatic browser launch. The CLI and app must use the same origin.
+With no subcommand, the CLI starts the `remote` device authorization flow. It opens a browser so you can sign in or create an account, then approve the device. After approval, the CLI saves device credentials and keeps the local agent running until you press Ctrl+C or send SIGTERM. If it cannot open a browser, visit the URL printed in the terminal. Add `--no-browser` to skip the automatic browser launch. The CLI and app must use the same origin.
 
 The `remote` flow saves device credentials. It does not save the browser authorization session or enrollment token. Each time you start `remote`, the CLI asks you to authorize the device again. If the saved device is still active, the CLI keeps its device ID and dashboard name and rotates its device token. If the device was revoked or deleted, the CLI registers a replacement during the same authorization flow.
 
@@ -36,18 +36,26 @@ Reauthorizing an existing device does not change its name, even when you pass a 
 
 ## Run the published package
 
-After you publish the package, use one of these commands to start `remote`. Replace the example address with your AnyRemote service URL.
+After you publish the package, run the CLI with no subcommand to connect to the production service:
 
 ```sh
 # Bun
-bunx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
+bunx @panda-ai/anyremote
 # npm
-npx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
+npx @panda-ai/anyremote
 # pnpm
-pnpm dlx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
+pnpm dlx @panda-ai/anyremote
 # Yarn
-yarn dlx @panda-ai/anyremote remote --base-url https://your-anyremote-domain
+yarn dlx @panda-ai/anyremote
 ```
+
+To connect to a preview, local app, or another AnyRemote origin, keep the explicit URL override:
+
+```sh
+bunx @panda-ai/anyremote --base-url https://your-anyremote-domain
+```
+
+The equivalent explicit subcommand remains available: `bunx @panda-ai/anyremote remote --base-url https://your-anyremote-domain`. URL selection uses `--base-url`, saved configuration, `ANYREMOTE_URL`, then `https://anyremote.dev`.
 
 You can also use these commands with a published package:
 
@@ -83,7 +91,7 @@ bun install --global ./artifacts/panda-ai-anyremote-0.2.1.tgz
 
 The CLI repository includes the shared protocol contracts and uses the MIT License. The parent AnyRemote repository pins its CLI version through a Git submodule.
 
-`login` also reads `ANYREMOTE_EMAIL` and `ANYREMOTE_PASSWORD`. The `pair`, `connect`, and account-management commands read `ANYREMOTE_URL` and `ANYREMOTE_TOKEN`. The CLI stores account sessions in the local config directory. Set `ANYREMOTE_CONFIG_DIR` to use a separate config directory. ChatGPT uses its own OAuth flow when it connects to `/mcp`; it does not use the CLI account token.
+`login` also reads `ANYREMOTE_EMAIL` and `ANYREMOTE_PASSWORD`. Commands that need an application origin use `--base-url`, saved configuration, `ANYREMOTE_URL`, or the production origin. The `pair`, `connect`, and account-management commands can also read `ANYREMOTE_TOKEN`. The CLI stores account sessions in the local config directory. Set `ANYREMOTE_CONFIG_DIR` to use a separate config directory. ChatGPT uses its own OAuth flow when it connects to `/mcp`; it does not use the CLI account token.
 
 The `logout` command ends the account session and keeps the device connection. It clears saved account credentials, including a session that has already expired. It keeps the credentials when a network or server error prevents logout. The `revoke` command revokes the saved device and clears its local credentials. It requires an account session or `ANYREMOTE_TOKEN`. The older `disconnect` command remains an alias for `revoke`. If no device is saved, `revoke` succeeds without making a request. The dashboard must approve a pairing code before `pair` can connect.
 

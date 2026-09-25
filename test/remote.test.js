@@ -110,6 +110,16 @@ test("remote uses scoped native device flow, browser fallback and stable enrollm
   );
 });
 
+test("remote opens the approved verification URL in the browser by default", async () => {
+  const f = fixture();
+  const opened = [];
+  f.options.openBrowser = async (...args) => opened.push(args);
+  await enrollRemoteDevice(f.options);
+  assert.deepEqual(opened, [
+    ["https://app.example.test/device?user_code=PUBLIC", { wait: false }],
+  ]);
+});
+
 test("remote rejects invalid names before requesting authorization", async () => {
   const f = fixture();
   f.options.name = " ";

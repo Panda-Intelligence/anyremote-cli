@@ -11,6 +11,8 @@ import { detectPlatform } from "./platform.js";
 import { enrollRemoteDevice } from "./remote.js";
 import { createRequestLogger } from "./request-log.js";
 
+const DEFAULT_BASE_URL = "https://anyremote.dev";
+
 function parseFlags(values) {
   const flags = {};
   const positional = [];
@@ -28,6 +30,10 @@ function parseFlags(values) {
     } else flags[key] = true;
   }
   return { flags, positional };
+}
+
+export function resolveBaseUrl({ explicit, saved, environment } = {}) {
+  return explicit || saved || environment || DEFAULT_BASE_URL;
 }
 
 function print(value) {
@@ -57,20 +63,28 @@ function clearConfigFields(config, fields) {
 
 function help() {
   print(
-    "Quick connect: anyremote remote --base-url <application-origin> [--name <computer>] [--no-browser]",
+    "Quick connect: anyremote [--base-url <application-origin>] [--name <computer>] [--no-browser]",
   );
   print(
-    `AnyRemote CLI\n\nUsage: anyremote <command> [options]\n\nCommands:\n  remote               Authorize and connect this computer\n  pair                 Create a pairing request\n  login                Save an AnyRemote login session\n  logout               End the saved account session\n  connect              Keep this computer connected\n  status               Show saved connection status\n  devices              List connected devices\n  revoke               Revoke the saved device\n  disconnect           Revoke a saved device (alias)\n  doctor               Check local runtime\n\nEnvironment:\n  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD\n`,
+    `AnyRemote CLI\n\nUsage: anyremote [<command>] [options]\n\nWith no command, AnyRemote authorizes and connects this computer to https://anyremote.dev.\nUse --base-url, saved configuration, or ANYREMOTE_URL to choose another origin.\n\nCommands:\n  remote               Authorize and connect this computer\n  pair                 Create a pairing request\n  login                Save an AnyRemote login session\n  logout               End the saved account session\n  connect              Keep this computer connected\n  status               Show saved connection status\n  devices              List connected devices\n  revoke               Revoke the saved device\n  disconnect           Revoke a saved device (alias)\n  doctor               Check local runtime\n\nEnvironment:\n  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD\n`,
   );
 }
 
 async function main(argv = process.argv.slice(2)) {
-  const command = argv[0];
-  const parsed = parseFlags(argv.slice(1));
-  if (!command || command === "help" || command === "--help") return help();
+  const parsed = parseFlags(argv);
+  if (
+    parsed.flags.help ||
+    parsed.positional.includes("-h") ||
+    parsed.positional[0] === "help"
+  )
+    return help();
+  const command = parsed.positional[0] || "remote";
   const config = await loadConfig();
-  const baseUrl =
-    parsed.flags.base_url || config.baseUrl || process.env.ANYREMOTE_URL;
+  const baseUrl = resolveBaseUrl({
+    explicit: parsed.flags.base_url,
+    saved: config.baseUrl,
+    environment: process.env.ANYREMOTE_URL,
+  });
   const token =
     parsed.flags.token || config.accessToken || process.env.ANYREMOTE_TOKEN;
   const cookie = config.sessionCookie;
@@ -82,14 +96,8 @@ async function main(argv = process.argv.slice(2)) {
       config: publicConfig(config),
     });
   }
-  if (
-    !baseUrl &&
-    !["status", "logout", "revoke", "disconnect"].includes(command)
-  )
-    throw new Error("Set ANYREMOTE_URL or pass --base-url");
-  const api = baseUrl ? new ApiClient({ baseUrl, token, cookie }) : null;
+  const api = new ApiClient({ baseUrl, token, cookie });
   if (command === "login") {
-    if (!baseUrl) throw new Error("Set ANYREMOTE_URL or pass --base-url");
     const email = parsed.flags.email || process.env.ANYREMOTE_EMAIL;
     const password = parsed.flags.password || process.env.ANYREMOTE_PASSWORD;
     if (!email || !password)
@@ -105,8 +113,6 @@ async function main(argv = process.argv.slice(2)) {
   }
   if (command === "logout") {
     const hasCredentials = Boolean(token || cookie);
-    if (hasCredentials && !baseUrl)
-      throw new Error("Set ANYREMOTE_URL or pass --base-url");
     let alreadyLoggedOut = !hasCredentials;
     if (hasCredentials) {
       try {
@@ -178,7 +184,6 @@ async function main(argv = process.argv.slice(2)) {
         });
       return print({ revoked: false, alreadyRevoked: true, deviceId: null });
     }
-    if (!api) throw new Error("Set ANYREMOTE_URL or pass --base-url");
     const result = await api.revokeDevice(deviceId);
     if (config.device?.id === deviceId)
       await saveConfig(clearConfigFields(config, ["device", "deviceToken"]), {
