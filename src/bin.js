@@ -10,6 +10,7 @@ import { createLocalToolExecutor } from "./local-tools.js";
 import { detectPlatform } from "./platform.js";
 import { enrollRemoteDevice } from "./remote.js";
 import { createRequestLogger } from "./request-log.js";
+import { CLI_VERSION } from "./version.js";
 
 const DEFAULT_BASE_URL = "https://anyremote.dev";
 
@@ -22,7 +23,15 @@ function parseFlags(values) {
       positional.push(value);
       continue;
     }
-    const key = value.slice(2).replaceAll("-", "_");
+    const equalsIndex = value.indexOf("=");
+    const hasInlineValue = equalsIndex !== -1;
+    const key = value
+      .slice(2, hasInlineValue ? equalsIndex : undefined)
+      .replaceAll("-", "_");
+    if (hasInlineValue) {
+      flags[key] = value.slice(equalsIndex + 1);
+      continue;
+    }
     const next = values[index + 1];
     if (next !== undefined && !next.startsWith("--")) {
       flags[key] = next;
@@ -32,8 +41,9 @@ function parseFlags(values) {
   return { flags, positional };
 }
 
-export function resolveBaseUrl({ explicit, saved, environment } = {}) {
-  return explicit || saved || environment || DEFAULT_BASE_URL;
+export function resolveBaseUrl({ command, explicit, saved, environment } = {}) {
+  const savedOverride = command === "remote" ? undefined : saved;
+  return explicit || savedOverride || environment || DEFAULT_BASE_URL;
 }
 
 function print(value) {
@@ -66,7 +76,7 @@ function help() {
     "Quick connect: anyremote [--base-url <application-origin>] [--name <computer>] [--no-browser]",
   );
   print(
-    `AnyRemote CLI\n\nUsage: anyremote [<command>] [options]\n\nWith no command, AnyRemote authorizes and connects this computer to https://anyremote.dev.\nUse --base-url, saved configuration, or ANYREMOTE_URL to choose another origin.\n\nCommands:\n  remote               Authorize and connect this computer\n  pair                 Create a pairing request\n  login                Save an AnyRemote login session\n  logout               End the saved account session\n  connect              Keep this computer connected\n  status               Show saved connection status\n  devices              List connected devices\n  revoke               Revoke the saved device\n  disconnect           Revoke a saved device (alias)\n  doctor               Check local runtime\n\nEnvironment:\n  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD\n`,
+    `AnyRemote CLI\n\nUsage: anyremote [<command>] [options]\n\nWith no command, AnyRemote authorizes and connects this computer to https://anyremote.dev.\nNew remote flows use --base-url, ANYREMOTE_URL, then the production origin.\nOther commands reuse the saved origin where applicable. Use ANYREMOTE_CONFIG_DIR for another configuration.\n\nCommands:\n  remote               Authorize and connect this computer\n  pair                 Create a pairing request\n  login                Save an AnyRemote login session\n  logout               End the saved account session\n  connect              Keep this computer connected\n  status               Show saved connection status\n  devices              List connected devices\n  revoke               Revoke the saved device\n  disconnect           Revoke a saved device (alias)\n  doctor               Check local runtime\n\nEnvironment:\n  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD\n`,
   );
 }
 
@@ -81,13 +91,27 @@ async function main(argv = process.argv.slice(2)) {
   const command = parsed.positional[0] || "remote";
   const config = await loadConfig();
   const baseUrl = resolveBaseUrl({
+    command,
     explicit: parsed.flags.base_url,
     saved: config.baseUrl,
     environment: process.env.ANYREMOTE_URL,
   });
+  const savedOrigin =
+    command === "remote" && config.baseUrl
+      ? new URL(config.baseUrl).origin
+      : undefined;
+  const originChanged = Boolean(
+    savedOrigin && savedOrigin !== new URL(baseUrl).origin,
+  );
+  const migrateSavedOrigin = command === "remote" && originChanged;
+  const originConfig = migrateSavedOrigin
+    ? clearConfigFields(config, ["accessToken", "sessionCookie"])
+    : config;
   const token =
-    parsed.flags.token || config.accessToken || process.env.ANYREMOTE_TOKEN;
-  const cookie = config.sessionCookie;
+    parsed.flags.token ||
+    originConfig.accessToken ||
+    process.env.ANYREMOTE_TOKEN;
+  const cookie = originConfig.sessionCookie;
   if (command === "doctor") {
     return print({
       node: process.version,
@@ -136,7 +160,7 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "pair") {
     const pairing = await api.createPairing({
       name: await resolveDeviceName(parsed.flags.name),
-      agentVersion: parsed.flags.version || "0.2.1",
+      agentVersion: parsed.flags.version || CLI_VERSION,
     });
     print(pairing);
     if (parsed.flags.wait || parsed.flags.code) {
@@ -199,25 +223,26 @@ async function main(argv = process.argv.slice(2)) {
     let agent;
     try {
       let paired = config;
-      if (
-        command === "remote" &&
-        config.device?.id &&
-        config.baseUrl &&
-        new URL(config.baseUrl).origin !== new URL(baseUrl).origin
-      )
-        throw new Error(
-          "Saved device belongs to a different application. Use a separate ANYREMOTE_CONFIG_DIR.",
-        );
       if (command === "remote") {
         const enrolled = await enrollRemoteDevice({
           baseUrl,
           name: parsed.flags.name,
           agentVersion: parsed.flags.version,
           noBrowser: Boolean(parsed.flags.no_browser),
-          existingDeviceId: config.device?.id,
+          existingDeviceId: originChanged ? undefined : config.device?.id,
           signal: controller.signal,
         });
-        paired = { ...config, ...enrolled };
+        paired = {
+          ...(migrateSavedOrigin
+            ? clearConfigFields(config, [
+                "accessToken",
+                "sessionCookie",
+                "device",
+                "deviceToken",
+              ])
+            : config),
+          ...enrolled,
+        };
         await saveConfig(paired);
         print({ status: "approved", device: paired.device });
       }
@@ -228,7 +253,7 @@ async function main(argv = process.argv.slice(2)) {
         deviceId: paired.device.id,
         deviceToken: paired.deviceToken,
         deviceName: paired.device.name,
-        agentVersion: parsed.flags.version || "0.2.1",
+        agentVersion: parsed.flags.version || CLI_VERSION,
         executor: createLocalToolExecutor(),
       });
       agent.on("connected", (event) => print(event));

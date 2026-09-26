@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION } from "@anyremote/contracts";
 import { WebSocketServer } from "ws";
 import { DeviceAgent } from "../src/agent.js";
 import { LocalToolExecutor } from "../src/local-tools.js";
+import { CLI_VERSION } from "../src/version.js";
 
 test("terminal stop bounds an unresponsive WebSocket close handshake", async () => {
   const socket = new EventEmitter();
@@ -119,7 +120,7 @@ test("DeviceAgent reconnects after a transient socket close", async () => {
     const [firstHelloRaw] = await once(socket, "message");
     const firstHello = JSON.parse(firstHelloRaw.toString("utf8"));
     assert.equal(firstHello.type, "hello");
-    assert.equal(firstHello.payload.agentVersion, "0.2.1");
+    assert.equal(firstHello.payload.agentVersion, CLI_VERSION);
     const second = once(server, "connection", {
       signal: AbortSignal.timeout(3000),
     });
@@ -128,7 +129,7 @@ test("DeviceAgent reconnects after a transient socket close", async () => {
     const [reconnectedHelloRaw] = await once(reconnected, "message");
     const reconnectedHello = JSON.parse(reconnectedHelloRaw.toString("utf8"));
     assert.equal(reconnectedHello.type, "hello");
-    assert.equal(reconnectedHello.payload.agentVersion, "0.2.1");
+    assert.equal(reconnectedHello.payload.agentVersion, CLI_VERSION);
     assert.equal(agent.shouldReconnect, true);
     assert.equal(executor.processes.get(running.processId).finishedAt, null);
     await agent.shutdown();

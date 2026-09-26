@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { enrollRemoteDevice } from "../src/remote.js";
+import { CLI_VERSION } from "../src/version.js";
 
 function fixture({
   errors = [],
@@ -95,7 +96,7 @@ test("remote uses scoped native device flow, browser fallback and stable enrollm
       name: JSON.parse(enrollments[0].init.body).name,
       agentVersion: JSON.parse(enrollments[0].init.body).agentVersion,
     },
-    { name: "工作电脑 💻", agentVersion: "0.2.1" },
+    { name: "工作电脑 💻", agentVersion: CLI_VERSION },
   );
   assert.deepEqual(JSON.parse(f.calls[0].init.body), {
     client_id: "anyremote-cli",

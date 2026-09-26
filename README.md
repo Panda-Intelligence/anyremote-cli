@@ -4,7 +4,7 @@
   <img src="https://preview.anyremote.dev/anyremote-app-icon.svg" alt="AnyRemote" width="112" height="112" />
 </p>
 
-Updated September 25, 2026. Editor: Codex.
+Updated September 26, 2026. Editor: Codex.
 
 The AnyRemote CLI runs on a computer you want to control. It receives MCP requests from AnyRemote and uses Node.js file and process APIs on that computer.
 
@@ -22,7 +22,7 @@ bun run src/bin.js --base-url http://localhost:5173
 
 With no subcommand, the CLI starts the `remote` device authorization flow. It opens a browser so you can sign in or create an account, then approve the device. After approval, the CLI saves device credentials and keeps the local agent running until you press Ctrl+C or send SIGTERM. If it cannot open a browser, visit the URL printed in the terminal. Add `--no-browser` to skip the automatic browser launch. The CLI and app must use the same origin.
 
-The `remote` flow saves device credentials. It does not save the browser authorization session or enrollment token. Each time you start `remote`, the CLI asks you to authorize the device again. If the saved device is still active, the CLI keeps its device ID and dashboard name and rotates its device token. If the device was revoked or deleted, the CLI registers a replacement during the same authorization flow.
+The `remote` flow saves device credentials. It does not save the browser authorization session or enrollment token. Each time you start `remote`, the CLI asks you to authorize the device again. If the saved device is still active on the selected origin, the CLI keeps its device ID and dashboard name and rotates its device token. If the device was revoked or deleted, the CLI registers a replacement during the same authorization flow. For `remote`, an explicit `--base-url` wins; otherwise `ANYREMOTE_URL` is used, then production. A saved origin is not used to choose a new remote target. When the selected origin differs from the saved origin, the CLI does not send old origin credentials and replaces the local device only after authorization succeeds. The previous server-side device remains on its origin. Use separate `ANYREMOTE_CONFIG_DIR` values to manage multiple origins at once.
 
 Use `connect` to connect with saved device credentials. Both commands reconnect after a temporary network failure without asking you to authorize again or replaying a request. Press Ctrl+C, send SIGTERM, or revoke the device to disconnect. The CLI also stops process tasks that it started. It does not install a background service or configure startup at login.
 
@@ -55,7 +55,7 @@ To connect to a preview, local app, or another AnyRemote origin, keep the explic
 bunx @panda-ai/anyremote --base-url https://your-anyremote-domain
 ```
 
-The equivalent explicit subcommand remains available: `bunx @panda-ai/anyremote remote --base-url https://your-anyremote-domain`. URL selection uses `--base-url`, saved configuration, `ANYREMOTE_URL`, then `https://anyremote.dev`.
+The equivalent explicit subcommand remains available: `bunx @panda-ai/anyremote remote --base-url https://your-anyremote-domain`. Both `--base-url https://your-anyremote-domain` and `--base-url=https://your-anyremote-domain` are supported. For `remote`, URL selection uses `--base-url`, then `ANYREMOTE_URL`, then `https://anyremote.dev`; it does not use a saved origin. Other commands keep their saved-origin behavior where applicable.
 
 You can also use these commands with a published package:
 
@@ -86,7 +86,7 @@ To run the source version against a local AnyRemote app, use the `remote` comman
 
 ```sh
 bun pm pack --destination artifacts
-bun install --global ./artifacts/panda-ai-anyremote-0.2.1.tgz
+bun install --global ./artifacts/panda-ai-anyremote-0.2.4.tgz
 ```
 
 The CLI repository includes the shared protocol contracts and uses the MIT License. The parent AnyRemote repository pins its CLI version through a Git submodule.

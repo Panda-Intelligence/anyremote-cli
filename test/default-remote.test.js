@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -86,6 +86,30 @@ test("base URL resolution preserves overrides and defaults to production", () =>
     "https://saved.example.test",
   );
   assert.equal(
+    resolveBaseUrl({
+      command: "remote",
+      saved: "https://preview.anyremote.dev",
+    }),
+    "https://anyremote.dev",
+  );
+  assert.equal(
+    resolveBaseUrl({
+      command: "remote",
+      saved: "https://preview.anyremote.dev",
+      environment: "https://environment.example.test",
+    }),
+    "https://environment.example.test",
+  );
+  assert.equal(
+    resolveBaseUrl({
+      command: "remote",
+      explicit: "https://explicit.example.test",
+      saved: "https://preview.anyremote.dev",
+      environment: "https://environment.example.test",
+    }),
+    "https://explicit.example.test",
+  );
+  assert.equal(
     resolveBaseUrl({ environment: "https://environment.example.test" }),
     "https://environment.example.test",
   );
@@ -107,6 +131,7 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
   const upgrades = [];
   const handshakes = [];
   const upgradeEvents = new EventEmitter();
+  let enrollmentStatus = 200;
   let origin;
   const server = createServer((request, response) => {
     const chunks = [];
@@ -117,6 +142,7 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
         method: request.method,
         path: request.url,
         authorization: request.headers.authorization,
+        cookie: request.headers.cookie,
         body,
       });
       if (request.url === "/api/auth/device/code")
@@ -131,6 +157,10 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
         return jsonResponse(response, 200, {
           access_token: "enrollment-token",
           token_type: "Bearer",
+        });
+      if (request.url === "/api/devices/enroll" && enrollmentStatus !== 200)
+        return jsonResponse(response, enrollmentStatus, {
+          error: { code: "ENROLLMENT_FAILED", message: "Enrollment failed" },
         });
       if (request.url === "/api/devices/enroll")
         return jsonResponse(response, 200, {
@@ -166,11 +196,34 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
   origin = `http://127.0.0.1:${server.address().port}`;
 
   try {
-    for (const [label, args] of [
+    const savedPreviewConfig = {
+      baseUrl: "https://preview.anyremote.dev",
+      accessToken: "preview-account-token",
+      sessionCookie: "preview-session-cookie",
+      device: { id: "preview-device", name: "Preview computer" },
+      deviceToken: "preview-device-token",
+      language: "fr",
+    };
+    for (const [label, args, initialConfig, failEnrollment] of [
       ["flags without a command", ["--base-url", origin, "--no-browser"]],
       [
         "explicit remote command",
         ["remote", "--base-url", origin, "--no-browser"],
+      ],
+      [
+        "explicit remote command with equals-form base URL",
+        ["remote", `--base-url=${origin}`, "--no-browser"],
+      ],
+      [
+        "explicit origin replaces saved Preview credentials only after enrollment",
+        ["remote", `--base-url=${origin}`, "--no-browser"],
+        savedPreviewConfig,
+      ],
+      [
+        "failed origin migration preserves saved Preview configuration",
+        ["remote", `--base-url=${origin}`, "--no-browser"],
+        savedPreviewConfig,
+        true,
       ],
     ]) {
       await t.test(label, async () => {
@@ -179,6 +232,14 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
         );
         const requestStart = requests.length;
         const upgradeStart = upgrades.length;
+        enrollmentStatus = failEnrollment ? 400 : 200;
+        if (initialConfig) {
+          await mkdir(configDirectory, { recursive: true });
+          await writeFile(
+            path.join(configDirectory, "config.json"),
+            `${JSON.stringify(initialConfig, null, 2)}\n`,
+          );
+        }
         const child = spawn(process.execPath, [binary, ...args], {
           env: {
             ...process.env,
@@ -200,6 +261,38 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
         });
 
         try {
+          if (failEnrollment) {
+            const [code, signal] = await waitForClose(
+              child,
+              8000,
+              `CLI did not exit after enrollment failure.\n${stdout}\n${stderr}`,
+            );
+            assert.equal(code, 1);
+            assert.equal(signal, null);
+            assert.match(stderr, /Device enrollment failed \(400\)/);
+            const saved = JSON.parse(
+              await readFile(path.join(configDirectory, "config.json"), "utf8"),
+            );
+            assert.deepEqual(saved, savedPreviewConfig);
+            const caseRequests = requests.slice(requestStart);
+            assert.ok(
+              caseRequests.every(
+                (request) =>
+                  request.authorization !== "Bearer preview-account-token" &&
+                  request.cookie !== "preview-session-cookie",
+              ),
+            );
+            assert.equal(
+              JSON.parse(
+                caseRequests.find(
+                  (request) => request.path === "/api/devices/enroll",
+                ).body,
+              ).existingDeviceId,
+              undefined,
+            );
+            return;
+          }
+
           await waitForRemoteStart(
             child,
             upgradeEvents,
@@ -236,6 +329,19 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
             (request) => request.path === "/api/devices/enroll",
           );
           assert.equal(enrollment.authorization, "Bearer enrollment-token");
+          assert.ok(
+            caseRequests.every(
+              (request) =>
+                request.authorization !== "Bearer preview-account-token" &&
+                request.cookie !== "preview-session-cookie",
+            ),
+          );
+          if (initialConfig) {
+            assert.equal(
+              JSON.parse(enrollment.body).existingDeviceId,
+              undefined,
+            );
+          }
 
           const closed = waitForClose(
             child,
@@ -253,7 +359,13 @@ test("a missing subcommand defaults to remote and explicit remote remains suppor
           assert.equal(saved.baseUrl, origin);
           assert.equal(saved.device.id, "device-1");
           assert.equal(saved.deviceToken, "device-token");
+          if (initialConfig) {
+            assert.equal(saved.accessToken, undefined);
+            assert.equal(saved.sessionCookie, undefined);
+            assert.equal(saved.language, "fr");
+          }
         } finally {
+          enrollmentStatus = 200;
           if (child.exitCode === null && child.signalCode === null) {
             child.kill("SIGTERM");
             await waitForClose(child, 5000, "CLI process did not close.").catch(

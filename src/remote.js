@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import open from "open";
 import { resolveDeviceName } from "./device-name.js";
 import { detectPlatform } from "./platform.js";
+import { CLI_VERSION } from "./version.js";
 
 const CLIENT_ID = "anyremote-cli";
 
@@ -10,7 +11,7 @@ const CLIENT_ID = "anyremote-cli";
 export async function enrollRemoteDevice({
   baseUrl,
   name,
-  agentVersion = "0.2.1",
+  agentVersion = CLI_VERSION,
   existingDeviceId,
   signal,
   noBrowser = false,

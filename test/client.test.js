@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApiClient } from "../src/client.js";
+import { CLI_VERSION } from "../src/version.js";
 
 test("pairing defaults to the package version and preserves overrides", async () => {
   const bodies = [];
@@ -20,6 +21,6 @@ test("pairing defaults to the package version and preserves overrides", async ()
 
   assert.deepEqual(
     bodies.map(({ agentVersion }) => agentVersion),
-    ["0.2.1", "9.8.7-custom"],
+    [CLI_VERSION, "9.8.7-custom"],
   );
 });

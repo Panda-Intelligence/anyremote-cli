@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ToolError } from "./errors.js";
 import { detectPlatform } from "./platform.js";
+import { CLI_VERSION } from "./version.js";
 
 function websocketUrl(baseUrl, path) {
   const url = new URL(baseUrl);
@@ -100,7 +101,11 @@ export class ApiClient {
     });
   }
 
-  createPairing({ name, platform = detectPlatform(), agentVersion = "0.2.1" }) {
+  createPairing({
+    name,
+    platform = detectPlatform(),
+    agentVersion = CLI_VERSION,
+  }) {
     return this.request("/api/pairings", {
       method: "POST",
       body: { name, platform, agentVersion },

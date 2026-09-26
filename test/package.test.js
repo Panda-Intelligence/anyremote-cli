@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { CLI_VERSION } from "../src/version.js";
 
 test("public distribution keeps the AnyRemote binary and standalone runtime", async () => {
   const manifest = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.equal(manifest.name, "@panda-ai/anyremote");
-  assert.equal(manifest.version, "0.2.1");
+  assert.equal(manifest.version, CLI_VERSION);
   assert.notEqual(manifest.private, true);
   assert.equal(manifest.license, "MIT");
   assert.deepEqual(manifest.repository, {

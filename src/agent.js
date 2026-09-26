@@ -8,6 +8,7 @@ import {
 import WebSocket from "ws";
 import { serializeToolError } from "./errors.js";
 import { detectPlatform } from "./platform.js";
+import { CLI_VERSION } from "./version.js";
 
 const MAX_COMPLETED_REQUESTS = 1024;
 const COMPLETED_RESULT_RETENTION_MS = 60_000;
@@ -45,7 +46,7 @@ export class DeviceAgent extends EventEmitter {
     deviceId,
     deviceToken,
     deviceName,
-    agentVersion = "0.2.1",
+    agentVersion = CLI_VERSION,
     executor,
     reconnect = true,
     WebSocketImpl = WebSocket,
