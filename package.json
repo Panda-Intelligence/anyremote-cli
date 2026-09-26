@@ -1,6 +1,6 @@
 {
   "name": "@panda-ai/anyremote",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Connect a local computer to AnyRemote and expose it through MCP.",
   "type": "module",
   "license": "MIT",

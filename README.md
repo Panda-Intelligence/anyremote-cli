@@ -40,32 +40,51 @@ After you publish the package, run the CLI with no subcommand to connect to the 
 
 ```sh
 # Bun
-bunx @panda-ai/anyremote
+bunx @panda-ai/anyremote@latest
 # npm
-npx @panda-ai/anyremote
+npx @panda-ai/anyremote@latest
 # pnpm
-pnpm dlx @panda-ai/anyremote
+pnpm dlx @panda-ai/anyremote@latest
 # Yarn
-yarn dlx @panda-ai/anyremote
+yarn dlx @panda-ai/anyremote@latest
+```
+
+The CLI handles `--help`/`-h` and `--version`/`-v` before loading local
+configuration or connecting to AnyRemote. The `version` command is also
+available. Use `--agent-version <value>` to override the version reported by
+this device agent; the older value-taking `--version <value>` form remains
+supported.
+
+When Bunx resolves an installed CLI from its package cache, the CLI checks the
+npm `latest` tag on every run. If a newer version exists, it launches that exact
+version through Bunx. When the registry cannot be reached, it continues with the
+cached CLI. The first run still depends on Bunx selecting a release that includes
+this update check; use `@latest` to request the current tag explicitly. Bunx
+can reuse a recent `latest` tag resolution for up to 24 hours, as described in
+the [Bun auto-install cache documentation](https://bun.sh/docs/runtime/auto-install).
+
+```sh
+bunx @panda-ai/anyremote@latest --version
+bunx @panda-ai/anyremote@latest --help
 ```
 
 To connect to a preview, local app, or another AnyRemote origin, keep the explicit URL override:
 
 ```sh
-bunx @panda-ai/anyremote --base-url https://your-anyremote-domain
+bunx @panda-ai/anyremote@latest --base-url https://your-anyremote-domain
 ```
 
-The equivalent explicit subcommand remains available: `bunx @panda-ai/anyremote remote --base-url https://your-anyremote-domain`. Both `--base-url https://your-anyremote-domain` and `--base-url=https://your-anyremote-domain` are supported. For `remote`, URL selection uses `--base-url`, then `ANYREMOTE_URL`, then `https://anyremote.dev`; it does not use a saved origin. Other commands keep their saved-origin behavior where applicable.
+The equivalent explicit subcommand remains available: `bunx @panda-ai/anyremote@latest remote --base-url https://your-anyremote-domain`. Both `--base-url https://your-anyremote-domain` and `--base-url=https://your-anyremote-domain` are supported. For `remote`, URL selection uses `--base-url`, then `ANYREMOTE_URL`, then `https://anyremote.dev`; it does not use a saved origin. Other commands keep their saved-origin behavior where applicable.
 
 You can also use these commands with a published package:
 
 ```sh
-bunx @panda-ai/anyremote doctor
-bunx @panda-ai/anyremote login --base-url https://your-anyremote-domain --email you@example.com --password 'your-password'
-bunx @panda-ai/anyremote pair --base-url https://your-anyremote-domain --token "$ANYREMOTE_TOKEN" --wait
-bunx @panda-ai/anyremote connect --base-url https://your-anyremote-domain --token "$ANYREMOTE_TOKEN"
-bunx @panda-ai/anyremote logout --base-url https://your-anyremote-domain
-bunx @panda-ai/anyremote revoke --base-url https://your-anyremote-domain
+bunx @panda-ai/anyremote@latest doctor
+bunx @panda-ai/anyremote@latest login --base-url https://your-anyremote-domain --email you@example.com --password 'your-password'
+bunx @panda-ai/anyremote@latest pair --base-url https://your-anyremote-domain --token "$ANYREMOTE_TOKEN" --wait
+bunx @panda-ai/anyremote@latest connect --base-url https://your-anyremote-domain --token "$ANYREMOTE_TOKEN"
+bunx @panda-ai/anyremote@latest logout --base-url https://your-anyremote-domain
+bunx @panda-ai/anyremote@latest revoke --base-url https://your-anyremote-domain
 ```
 
 ## Develop and test
@@ -86,7 +105,7 @@ To run the source version against a local AnyRemote app, use the `remote` comman
 
 ```sh
 bun pm pack --destination artifacts
-bun install --global ./artifacts/panda-ai-anyremote-0.2.4.tgz
+bun install --global ./artifacts/panda-ai-anyremote-0.2.5.tgz
 ```
 
 The CLI repository includes the shared protocol contracts and uses the MIT License. The parent AnyRemote repository pins its CLI version through a Git submodule.

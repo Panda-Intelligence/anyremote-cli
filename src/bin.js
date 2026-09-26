@@ -10,7 +10,8 @@ import { createLocalToolExecutor } from "./local-tools.js";
 import { detectPlatform } from "./platform.js";
 import { enrollRemoteDevice } from "./remote.js";
 import { createRequestLogger } from "./request-log.js";
-import { CLI_VERSION } from "./version.js";
+import { updateBunxCliIfNeeded } from "./update.js";
+import { CLI_PACKAGE_NAME, CLI_VERSION } from "./version.js";
 
 const DEFAULT_BASE_URL = "https://anyremote.dev";
 
@@ -19,6 +20,10 @@ function parseFlags(values) {
   const positional = [];
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
+    if (value === "-h" || value === "-v") {
+      flags[value === "-h" ? "help" : "version"] = true;
+      continue;
+    }
     if (!value.startsWith("--")) {
       positional.push(value);
       continue;
@@ -73,21 +78,62 @@ function clearConfigFields(config, fields) {
 
 function help() {
   print(
-    "Quick connect: anyremote [--base-url <application-origin>] [--name <computer>] [--no-browser]",
-  );
-  print(
-    `AnyRemote CLI\n\nUsage: anyremote [<command>] [options]\n\nWith no command, AnyRemote authorizes and connects this computer to https://anyremote.dev.\nNew remote flows use --base-url, ANYREMOTE_URL, then the production origin.\nOther commands reuse the saved origin where applicable. Use ANYREMOTE_CONFIG_DIR for another configuration.\n\nCommands:\n  remote               Authorize and connect this computer\n  pair                 Create a pairing request\n  login                Save an AnyRemote login session\n  logout               End the saved account session\n  connect              Keep this computer connected\n  status               Show saved connection status\n  devices              List connected devices\n  revoke               Revoke the saved device\n  disconnect           Revoke a saved device (alias)\n  doctor               Check local runtime\n\nEnvironment:\n  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD\n`,
+    [
+      "Quick connect: anyremote [--base-url <application-origin>] [--name <computer>] [--no-browser]",
+      "",
+      "AnyRemote CLI",
+      "",
+      "Usage: anyremote [<command>] [options]",
+      "",
+      "With no command, AnyRemote authorizes and connects this computer to https://anyremote.dev.",
+      "New remote flows use --base-url, ANYREMOTE_URL, then the production origin.",
+      "Other commands reuse the saved origin where applicable. Use ANYREMOTE_CONFIG_DIR for another configuration.",
+      "",
+      "Commands:",
+      "  remote                     Authorize and connect this computer",
+      "  pair                       Create a pairing request",
+      "  login                      Save an AnyRemote login session",
+      "  logout                     End the saved account session",
+      "  connect                    Keep this computer connected",
+      "  status                     Show saved connection status",
+      "  devices                    List connected devices",
+      "  revoke                     Revoke the saved device",
+      "  disconnect                 Revoke a saved device (alias)",
+      "  doctor                     Check local runtime",
+      "  version                    Show the CLI version",
+      "",
+      "Options:",
+      "  -h, --help                 Show this help",
+      "  -v, --version              Show the CLI version",
+      "      --agent-version <value> Override the version reported by this agent",
+      "",
+      "Environment:",
+      "  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD",
+    ].join("\n"),
   );
 }
 
 async function main(argv = process.argv.slice(2)) {
-  const parsed = parseFlags(argv);
   if (
-    parsed.flags.help ||
-    parsed.positional.includes("-h") ||
-    parsed.positional[0] === "help"
+    await updateBunxCliIfNeeded({
+      argv,
+      cliPath: realpathSync(fileURLToPath(import.meta.url)),
+      cliVersion: CLI_VERSION,
+      packageName: CLI_PACKAGE_NAME,
+    })
   )
-    return help();
+    return;
+
+  const parsed = parseFlags(argv);
+  if (parsed.flags.help || parsed.positional[0] === "help") return help();
+  if (parsed.flags.version === true || parsed.positional[0] === "version")
+    return print(CLI_VERSION);
+  const agentVersionOverride =
+    typeof parsed.flags.agent_version === "string"
+      ? parsed.flags.agent_version
+      : typeof parsed.flags.version === "string"
+        ? parsed.flags.version
+        : undefined;
   const command = parsed.positional[0] || "remote";
   const config = await loadConfig();
   const baseUrl = resolveBaseUrl({
@@ -160,7 +206,7 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "pair") {
     const pairing = await api.createPairing({
       name: await resolveDeviceName(parsed.flags.name),
-      agentVersion: parsed.flags.version || CLI_VERSION,
+      agentVersion: agentVersionOverride || CLI_VERSION,
     });
     print(pairing);
     if (parsed.flags.wait || parsed.flags.code) {
@@ -227,7 +273,7 @@ async function main(argv = process.argv.slice(2)) {
         const enrolled = await enrollRemoteDevice({
           baseUrl,
           name: parsed.flags.name,
-          agentVersion: parsed.flags.version,
+          agentVersion: agentVersionOverride,
           noBrowser: Boolean(parsed.flags.no_browser),
           existingDeviceId: originChanged ? undefined : config.device?.id,
           signal: controller.signal,
@@ -253,7 +299,7 @@ async function main(argv = process.argv.slice(2)) {
         deviceId: paired.device.id,
         deviceToken: paired.deviceToken,
         deviceName: paired.device.name,
-        agentVersion: parsed.flags.version || CLI_VERSION,
+        agentVersion: agentVersionOverride || CLI_VERSION,
         executor: createLocalToolExecutor(),
       });
       agent.on("connected", (event) => print(event));
