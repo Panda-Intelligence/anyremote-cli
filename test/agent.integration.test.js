@@ -41,12 +41,13 @@ test("explicit shutdown stops only owned processes and escalates ignored termina
   const executor = new LocalToolExecutor();
   const otherExecutor = new LocalToolExecutor();
   const start = async (owner, ignoreTermination) => {
-    const result = owner.startProcess({
+    const result = await owner.startProcess({
       command: process.execPath,
       args: [
         "-e",
         `${ignoreTermination ? 'process.on("SIGTERM",()=>{});' : ""}console.log("ready");setInterval(()=>{},1000)`,
       ],
+      waitMs: 0,
     });
     const state = owner.processes.get(result.processId);
     await once(state.child.stdout, "data", {
@@ -63,7 +64,7 @@ test("explicit shutdown stops only owned processes and escalates ignored termina
     assert.notEqual(owned.finishedAt, null);
     if (process.platform !== "win32") assert.equal(owned.signal, "SIGKILL");
     assert.equal(other.finishedAt, null);
-    assert.throws(
+    await assert.rejects(
       () => executor.startProcess({ command: process.execPath }),
       /shutting down/,
     );
@@ -102,9 +103,10 @@ test("DeviceAgent reconnects after a transient socket close", async () => {
   const server = new WebSocketServer({ port: 0 });
   await once(server, "listening");
   const executor = new LocalToolExecutor();
-  const running = executor.startProcess({
+  const running = await executor.startProcess({
     command: process.execPath,
     args: ["-e", "setInterval(()=>{},1000)"],
+    waitMs: 0,
   });
   const agent = new DeviceAgent({
     apiClient: { connectUrl: () => `ws://127.0.0.1:${server.address().port}` },
@@ -312,7 +314,9 @@ test("DeviceAgent sends hello and executes a remote request once across duplicat
     assert.equal(executions, 1);
     assert.deepEqual(Object.keys(requestEvents[0]).sort(), [
       "elapsedMs",
+      "executionMs",
       "requestId",
+      "resultBytes",
       "status",
       "tool",
     ]);
@@ -326,4 +330,137 @@ test("DeviceAgent sends hello and executes a remote request once across duplicat
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("bounded process requests return output once, honor deadlines and survive a lost socket", async (t) => {
+  const server = new WebSocketServer({ port: 0 });
+  await once(server, "listening");
+  const executor = new LocalToolExecutor();
+  let executions = 0;
+  let executionStarted;
+  const agent = new DeviceAgent({
+    apiClient: { connectUrl: () => `ws://127.0.0.1:${server.address().port}` },
+    deviceId: "process-device",
+    deviceToken: "local-token",
+    reconnect: false,
+    executor: {
+      execute: (...args) => {
+        executions += 1;
+        executionStarted?.();
+        return executor.execute(...args);
+      },
+      shutdown: () => executor.shutdown(),
+    },
+  });
+  t.after(async () => {
+    await agent.shutdown();
+    server.close();
+  });
+  const connection = once(server, "connection");
+  const connected = once(agent, "connected");
+  agent.start();
+  const [socket] = await connection;
+  const [helloRaw] = await once(socket, "message");
+  const hello = JSON.parse(helloRaw.toString());
+  socket.send(
+    JSON.stringify({
+      version: PROTOCOL_VERSION,
+      type: "hello",
+      requestId: hello.requestId,
+      deviceId: "process-device",
+      connectionEpoch: "process-epoch",
+      payload: { accepted: true },
+    }),
+  );
+  const [connectionTiming] = await connected;
+  assert.ok(connectionTiming.openMs >= 0);
+  assert.ok(connectionTiming.helloMs >= 0);
+  assert.equal(
+    connectionTiming.openMs + connectionTiming.helloMs,
+    connectionTiming.elapsedMs,
+  );
+  const events = [];
+  agent.on("request", (event) => events.push(event));
+  const request = (requestId, args, deadlineMs = 3000) => ({
+    version: PROTOCOL_VERSION,
+    type: "request",
+    requestId,
+    deviceId: "process-device",
+    connectionEpoch: "process-epoch",
+    payload: {
+      requestId,
+      deviceId: "process-device",
+      tool: "process.start",
+      arguments: { command: process.execPath, args, waitMs: 1000 },
+      deadline: new Date(Date.now() + deadlineMs).toISOString(),
+    },
+  });
+  const short = request("short-process", [
+    "-e",
+    'process.stdout.write("remote one")',
+  ]);
+  const resultMessage = once(socket, "message");
+  socket.send(JSON.stringify(short));
+  socket.send(JSON.stringify(short));
+  const [resultRaw] = await resultMessage;
+  const result = JSON.parse(resultRaw.toString());
+  assert.equal(result.payload.status, "success");
+  assert.equal(result.payload.output.stdout, "remote one");
+  assert.equal(result.payload.output.exitCode, 0);
+  assert.equal(result.payload.output.exited, true);
+  assert.equal(result.payload.output.nextCursor, 10);
+  assert.equal(executions, 1);
+  assert.equal(executor.processes.size, 1);
+  const replayMessage = once(socket, "message");
+  socket.send(JSON.stringify(short));
+  const [replayRaw] = await replayMessage;
+  assert.deepEqual(JSON.parse(replayRaw.toString()).payload, result.payload);
+  assert.equal(executions, 1);
+  assert.equal(
+    events[0].resultBytes,
+    Buffer.byteLength(JSON.stringify(result.payload)),
+  );
+  assert.ok(events[0].executionMs >= 0);
+  assert.ok(events[0].elapsedMs >= events[0].executionMs);
+
+  const silent = request(
+    "deadline-process",
+    ["-e", "setInterval(()=>{},1000)"],
+    100,
+  );
+  silent.payload.arguments.waitMs = 10_000;
+  const boundedMessage = once(socket, "message");
+  socket.send(JSON.stringify(silent));
+  const [boundedRaw] = await boundedMessage;
+  const bounded = JSON.parse(boundedRaw.toString());
+  assert.equal(bounded.payload.status, "success");
+  assert.equal(bounded.payload.output.running, true);
+  assert.equal(executions, 2);
+  assert.equal(
+    executor.processes
+      .get(bounded.payload.output.processId)
+      .listenerCount("changed"),
+    0,
+  );
+
+  const lost = request("lost-process", ["-e", "setInterval(()=>{},1000)"], 150);
+  lost.payload.arguments.waitMs = 10_000;
+  const began = new Promise((resolve) => {
+    executionStarted = resolve;
+  });
+  const finished = once(agent, "request");
+  const disconnected = once(agent, "disconnected");
+  socket.send(JSON.stringify(lost));
+  await began;
+  socket.close(1012, "response connection lost");
+  await disconnected;
+  const [finishedEvent] = await finished;
+  assert.equal(finishedEvent.requestId, "lost-process");
+  const retained = agent.completed.get("lost-process").result;
+  assert.equal(retained.status, "success");
+  assert.equal(retained.output.running, true);
+  const surviving = executor.processes.get(retained.output.processId);
+  assert.equal(surviving.finishedAt, null);
+  assert.equal(surviving.listenerCount("changed"), 0);
+  assert.equal(executions, 3);
 });

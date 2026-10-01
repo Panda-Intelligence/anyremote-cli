@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { performance } from "node:perf_hooks";
 import {
   connectionEnvelopeSchema,
   PROTOCOL_VERSION,
@@ -68,6 +69,8 @@ export class DeviceAgent extends EventEmitter {
     this.WebSocketImpl = WebSocketImpl;
     this.heartbeatMs = heartbeatMs;
     this.connectTimeoutMs = connectTimeoutMs;
+    this.connectionStartedAt = null;
+    this.socketOpenedAt = null;
     this.connectionEpoch = randomUUID();
     this.socket = null;
     this.heartbeatTimer = null;
@@ -120,6 +123,8 @@ export class DeviceAgent extends EventEmitter {
     if (this.stopping || this.socket) return;
     this.reconnectTimer = null;
     const url = this.apiClient.connectUrl(this.deviceId);
+    this.connectionStartedAt = performance.now();
+    this.socketOpenedAt = null;
     let socket;
     try {
       socket = new this.WebSocketImpl(url, {
@@ -157,6 +162,7 @@ export class DeviceAgent extends EventEmitter {
 
   handleOpen(socket = this.socket) {
     if (!socket || this.socket !== socket) return;
+    this.socketOpenedAt = performance.now();
     this.socketAlive = true;
     if (
       !this.send("hello", randomUUID(), {
@@ -294,6 +300,7 @@ export class DeviceAgent extends EventEmitter {
     while (this.completed.size > MAX_COMPLETED_REQUESTS)
       this.deleteCompleted(this.completed.keys().next().value);
     this.scheduleCompletedCleanup();
+    return resultBytes;
   }
 
   async handleMessage(socket, data) {
@@ -328,9 +335,15 @@ export class DeviceAgent extends EventEmitter {
         clearTimeout(this.connectTimer);
         this.connectTimer = null;
         clearInterval(this.heartbeatTimer);
+        const connectedAt = performance.now();
+        const startedAt = this.connectionStartedAt ?? connectedAt;
+        const openedAt = this.socketOpenedAt ?? connectedAt;
         this.emit("connected", {
           deviceId: this.deviceId,
           connectionEpoch: this.connectionEpoch,
+          openMs: openedAt - startedAt,
+          helloMs: connectedAt - openedAt,
+          elapsedMs: connectedAt - startedAt,
         });
         this.heartbeatTimer = setInterval(() => {
           if (this.socket !== socket || this.stopping) return;
@@ -432,6 +445,8 @@ export class DeviceAgent extends EventEmitter {
         tool: input.tool,
         status: result.status,
         elapsedMs: 0,
+        executionMs: 0,
+        resultBytes: serializedResultBytes(result),
       });
       return;
     }
@@ -451,7 +466,9 @@ export class DeviceAgent extends EventEmitter {
           SCREEN_CAPTURE_RESULT_RESERVATION_BYTES;
       };
     }
-    const startedAt = Date.now();
+    const startedAt = performance.now();
+    let executionStartedAt;
+    let executionMs = 0;
     let result;
     let timeoutId;
     try {
@@ -464,6 +481,7 @@ export class DeviceAgent extends EventEmitter {
         timeoutError.code = "OUTCOME_UNKNOWN";
         timeoutId = setTimeout(() => reject(timeoutError), remaining);
       });
+      executionStartedAt = performance.now();
       const execution = Promise.resolve(
         this.executor.execute(input.tool, input.arguments, {
           requestId: input.requestId,
@@ -495,12 +513,14 @@ export class DeviceAgent extends EventEmitter {
         };
       }
     } finally {
+      if (executionStartedAt !== undefined)
+        executionMs = performance.now() - executionStartedAt;
       if (timeoutId) clearTimeout(timeoutId);
       this.inFlight.delete(input.requestId);
       if (isScreenCapture && !captureExecutionStarted)
         releaseCaptureReservation();
     }
-    this.rememberCompleted(input.requestId, hash, result);
+    const resultBytes = this.rememberCompleted(input.requestId, hash, result);
     this.send("result", input.requestId, result);
     // 事件只携带 allowlist 元数据；调用方不应通过诊断日志接触原始参数
     // 或执行结果中的路径、文件内容、命令和环境变量。
@@ -508,7 +528,9 @@ export class DeviceAgent extends EventEmitter {
       requestId: input.requestId,
       tool: input.tool,
       status: result.status,
-      elapsedMs: Date.now() - startedAt,
+      elapsedMs: performance.now() - startedAt,
+      executionMs,
+      resultBytes,
     });
   }
 }

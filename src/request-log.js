@@ -25,13 +25,21 @@ export function formatRequestLog(event, { now = Date.now } = {}) {
     typeof event.tool === "string" && event.tool.length <= 200
       ? event.tool
       : "unknown";
-  return {
+  const record = {
     timestamp: new Date(now()).toISOString(),
     requestId,
     tool,
     status: safeStatus(event.status),
     elapsedMs: safeElapsedMs(event.elapsedMs),
   };
+  if (event.executionMs !== undefined)
+    record.executionMs = safeElapsedMs(event.executionMs);
+  if (event.resultBytes !== undefined)
+    record.resultBytes =
+      Number.isSafeInteger(event.resultBytes) && event.resultBytes >= 0
+        ? event.resultBytes
+        : 0;
+  return record;
 }
 
 /**

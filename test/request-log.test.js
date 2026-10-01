@@ -14,6 +14,8 @@ test("request logger emits only an allowlisted stderr record", () => {
     tool: "files.read",
     status: "success",
     elapsedMs: 12.6,
+    executionMs: 10.3,
+    resultBytes: 64,
     arguments: {
       path: "/Users/private/secret.txt",
       content: "private file contents",
@@ -35,6 +37,8 @@ test("request logger emits only an allowlisted stderr record", () => {
     tool: "files.read",
     status: "success",
     elapsedMs: 13,
+    executionMs: 10,
+    resultBytes: 64,
   });
   assert.doesNotMatch(
     lines[0],
@@ -50,6 +54,8 @@ test("request log normalizes malformed metadata without serializing nested data"
         tool: "x".repeat(201),
         status: "unexpected",
         elapsedMs: Number.NaN,
+        executionMs: Number.POSITIVE_INFINITY,
+        resultBytes: { data: "private" },
         nested: { path: "/private" },
       },
       { now: () => 0 },
@@ -60,6 +66,8 @@ test("request log normalizes malformed metadata without serializing nested data"
       tool: "unknown",
       status: "error",
       elapsedMs: 0,
+      executionMs: 0,
+      resultBytes: 0,
     },
   );
 });

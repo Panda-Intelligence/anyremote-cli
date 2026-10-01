@@ -105,7 +105,7 @@ To run the source version against a local AnyRemote app, use the `remote` comman
 
 ```sh
 bun pm pack --destination artifacts
-bun install --global ./artifacts/panda-ai-anyremote-0.2.5.tgz
+bun install --global ./artifacts/panda-ai-anyremote-0.2.6.tgz
 ```
 
 The CLI repository includes the shared protocol contracts and uses the MIT License. The parent AnyRemote repository pins its CLI version through a Git submodule.
@@ -116,7 +116,19 @@ The `logout` command ends the account session and keeps the device connection. I
 
 ## Request logs
 
-The CLI writes request time, request ID, tool name, status, and duration to stderr. It does not log request arguments, paths, file contents, commands, environment variables, results, tokens, or approval codes. Stdout remains available for command output.
+The CLI writes request time, request ID, tool name, status, total duration, executor duration, and serialized result size to stderr. Stdout remains available for command output.
+
+## Process output
+
+<!-- 2026-10-01 · Codex：CLI 0.2.6 与 Worker 的进程结果契约必须一起升级。 -->
+
+`process.start`, `process.read`, and `process.write` return bounded stdout/stderr with the process state and byte cursors. They accept `waitMs` from 0 to 10000 (default 1000) and `maxBytes` from 1 to 65536 (default 65536). The wait controls this response; it does not terminate the process. A short command can finish and return its output in one start call. A nonzero `exitCode` remains a successful tool result.
+
+Start waits for exit or its budget. Read returns immediately when output or exit is already available, otherwise it waits for new output. Write queues stdin/eof once and waits for a response; `accepted` means queued, not processed by the program. Write defaults its cursor to the output end immediately before the input; pass `cursor` to include earlier unread output.
+
+Use `nextCursor` for the next read. `outputStartCursor` identifies the earliest byte still buffered, and `truncated` reports output omitted from the page or evicted from the buffer. If a complete UTF-8 character cannot fit into a small page, the result keeps its process handle and reports the required `maxBytes` in `error`; read again at the same cursor with that larger page. An incomplete character in a running stream waits for more bytes and does not claim the page is too small. Reads are independent and do not consume shared output. Remote response waits are also bounded by the remaining request deadline. Worker process tools require CLI 0.2.6 or newer.
+
+The process streams use Node's UTF-8 decoder before buffering. A character split across OS chunks enters the output cursor when complete, independently for stdout and stderr. Cursors count the UTF-8 bytes stored in that text buffer; invalid UTF-8 is normalized to Node's replacement characters.
 
 ## Screen capture
 
