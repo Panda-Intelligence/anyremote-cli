@@ -1,6 +1,6 @@
 {
   "name": "@panda-ai/anyremote",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Connect a local computer to AnyRemote and expose it through MCP.",
   "type": "module",
   "license": "MIT",
@@ -41,13 +41,13 @@
   },
   "dependencies": {
     "open": "^11.0.4",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@anyremote/contracts": "workspace:*",
     "@biomejs/biome": "^2.5.14",
-    "@modelcontextprotocol/sdk": "^1.30.1"
+    "@modelcontextprotocol/sdk": "^1.32.2"
   },
   "engines": {
     "node": ">=20.9.0"
