@@ -24,9 +24,11 @@ test("public distribution keeps the AnyRemote binary and standalone runtime", as
   assert.deepEqual(manifest.bin, { anyremote: "dist/bin.js" });
   assert.deepEqual(manifest.files, ["dist", "README.md"]);
   assert.ok(manifest.dependencies.sharp);
+  assert.ok(manifest.dependencies.serialport);
   assert.equal(manifest.dependencies["@modelcontextprotocol/sdk"], undefined);
   assert.ok(manifest.devDependencies["@modelcontextprotocol/sdk"]);
   assert.match(manifest.scripts.build, /--external sharp/);
+  assert.match(manifest.scripts.build, /--external serialport/);
   for (const version of Object.values(manifest.dependencies)) {
     assert.doesNotMatch(version, /^(workspace:|file:|link:)/);
   }

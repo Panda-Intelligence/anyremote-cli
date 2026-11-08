@@ -85,6 +85,8 @@ export class DeviceAgent extends EventEmitter {
     this.activeScreenCaptures = 0;
     this.completedCleanupTimer = null;
     this.inFlight = new Set();
+    this.executor.setDeviceId?.(deviceId);
+    this.streamSink = (frame) => this.send("stream", frame.sessionId, frame);
   }
 
   start() {
@@ -164,12 +166,16 @@ export class DeviceAgent extends EventEmitter {
     if (!socket || this.socket !== socket) return;
     this.socketOpenedAt = performance.now();
     this.socketAlive = true;
+    const capabilities = this.executor.capabilities?.() ?? [];
+    const sessions = this.executor.serialSessions?.() ?? [];
     if (
       !this.send("hello", randomUUID(), {
         deviceToken: this.deviceToken,
         name: this.deviceName,
         platform: detectPlatform(),
         agentVersion: this.agentVersion,
+        ...(capabilities.length > 0 ? { capabilities } : {}),
+        ...(sessions.length > 0 ? { sessions } : {}),
       })
     )
       this.terminateSocket(socket);
@@ -381,7 +387,14 @@ export class DeviceAgent extends EventEmitter {
       return;
     }
     if (envelope.type === "request") await this.handleRequest(envelope);
-    else if (envelope.type === "cancel") this.emit("cancel", envelope);
+    else if (envelope.type === "stream") {
+      // 串流帧不走请求/幂等缓存；内容只交给会话管理器，不记录日志。
+      try {
+        this.executor.handleStreamFrame?.(envelope.payload, this.streamSink);
+      } catch (error) {
+        this.emit("protocolError", error);
+      }
+    } else if (envelope.type === "cancel") this.emit("cancel", envelope);
   }
 
   async handleRequest(envelope) {

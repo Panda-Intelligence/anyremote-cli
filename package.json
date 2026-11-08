@@ -1,6 +1,6 @@
 {
   "name": "@panda-ai/anyremote",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "Connect a local computer to AnyRemote and expose it through MCP.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js && bun --cwd packages/contracts test",
-    "build": "bun build src/bin.js src/index.js src/local-tools.js src/agent.js --outdir dist --target node --format esm --external open --external sharp",
+    "build": "bun build src/bin.js src/index.js src/local-tools.js src/agent.js --outdir dist --target node --format esm --external open --external serialport --external sharp",
     "typecheck": "bun --cwd packages/contracts typecheck",
     "lint": "bunx --bun biome check .",
     "prepack": "bun run build",
@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "open": "^11.0.4",
+    "serialport": "^13.0.0",
     "sharp": "^0.35.5",
     "ws": "^8.21.3"
   },

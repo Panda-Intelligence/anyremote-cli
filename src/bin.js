@@ -4,12 +4,21 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { DeviceAgent } from "./agent.js";
 import { ApiClient } from "./client.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { loadConfig, resolveSerialAllow, saveConfig } from "./config.js";
 import { resolveDeviceName } from "./device-name.js";
 import { createLocalToolExecutor } from "./local-tools.js";
 import { detectPlatform } from "./platform.js";
 import { enrollRemoteDevice } from "./remote.js";
-import { createRequestLogger } from "./request-log.js";
+import {
+  createRequestLogger,
+  createSerialSessionLogger,
+} from "./request-log.js";
+import {
+  createSerialBinding,
+  detectSerialRuntime,
+  SERIAL_BUN_UNSUPPORTED_MESSAGE,
+} from "./serial/binding.js";
+import { SerialSessionManager } from "./serial/sessions.js";
 import { updateBunxCliIfNeeded } from "./update.js";
 import { CLI_PACKAGE_NAME, CLI_VERSION } from "./version.js";
 
@@ -63,6 +72,9 @@ function publicConfig(config) {
     device: config.device,
     hasAccessToken: Boolean(config.accessToken),
     hasSession: Boolean(config.sessionCookie),
+    serialAllowCount: Array.isArray(config.serialAllow)
+      ? config.serialAllow.length
+      : 0,
   };
 }
 
@@ -100,12 +112,15 @@ function help() {
       "  revoke                     Revoke the saved device",
       "  disconnect                 Revoke a saved device (alias)",
       "  doctor                     Check local runtime",
+      "  serial ports               List local serial ports and show which are allowed",
       "  version                    Show the CLI version",
       "",
       "Options:",
       "  -h, --help                 Show this help",
       "  -v, --version              Show the CLI version",
       "      --agent-version <value> Override the version reported by this agent",
+      "      --serial-allow <globs>  Expose matching serial ports (comma separated; remote/connect; default none)",
+      "      --stream-coalesce-ms <n> Serial stream batching window, 2-50 ms (default 10)",
       "",
       "Environment:",
       "  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD",
@@ -136,6 +151,28 @@ async function main(argv = process.argv.slice(2)) {
         : undefined;
   const command = parsed.positional[0] || "remote";
   const config = await loadConfig();
+  const serialAllow = resolveSerialAllow({
+    flag: parsed.flags.serial_allow,
+    saved: config.serialAllow,
+  });
+  if (
+    serialAllow.length > 0 &&
+    detectSerialRuntime() === "bun" &&
+    (command === "serial" || command === "remote" || command === "connect")
+  )
+    console.error(`Warning: ${SERIAL_BUN_UNSUPPORTED_MESSAGE}`);
+  if (command === "serial") {
+    if (parsed.positional[1] !== "ports")
+      throw new Error("Usage: anyremote serial ports");
+    const manager = new SerialSessionManager({
+      binding: createSerialBinding(),
+      allow: serialAllow,
+    });
+    return print({
+      allowCount: serialAllow.length,
+      ports: await manager.candidates(),
+    });
+  }
   const baseUrl = resolveBaseUrl({
     command,
     explicit: parsed.flags.base_url,
@@ -262,6 +299,21 @@ async function main(argv = process.argv.slice(2)) {
     return print({ ...(result || {}), revoked: true, deviceId });
   }
   if (command === "remote" || command === "connect") {
+    if (parsed.flags.serial_allow !== undefined) {
+      config.serialAllow = serialAllow;
+      await saveConfig(config);
+    }
+    const streamCoalesceMs =
+      parsed.flags.stream_coalesce_ms === undefined
+        ? undefined
+        : Number(parsed.flags.stream_coalesce_ms);
+    if (
+      streamCoalesceMs !== undefined &&
+      (!Number.isInteger(streamCoalesceMs) ||
+        streamCoalesceMs < 2 ||
+        streamCoalesceMs > 50)
+    )
+      throw new Error("--stream-coalesce-ms must be an integer from 2 to 50");
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
@@ -294,13 +346,19 @@ async function main(argv = process.argv.slice(2)) {
       }
       if (!paired.device?.id || !paired.deviceToken)
         throw new Error("Pair a device first");
+      const executor = createLocalToolExecutor({
+        serialAllow,
+        streamCoalesceMs,
+        onSerialSessionClosed: createSerialSessionLogger(),
+      });
+      await executor.prepare();
       agent = new DeviceAgent({
         apiClient: api,
         deviceId: paired.device.id,
         deviceToken: paired.deviceToken,
         deviceName: paired.device.name,
         agentVersion: agentVersionOverride || CLI_VERSION,
-        executor: createLocalToolExecutor(),
+        executor,
       });
       agent.on("connected", (event) => print(event));
       agent.on("disconnected", (event) => print(event));

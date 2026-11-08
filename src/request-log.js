@@ -55,3 +55,39 @@ export function createRequestLogger({
     write(`${JSON.stringify(record)}\n`);
   };
 }
+
+function safeCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * 串口会话结束时的计数行：只含会话编号和字节计数，路径固定写占位符，
+ * 不记录任何串口数据或参数。
+ */
+export function formatSerialSessionLog(event, { now = Date.now } = {}) {
+  if (!event || typeof event !== "object") return null;
+  return {
+    timestamp: new Date(now()).toISOString(),
+    event: "serial.session.closed",
+    sessionId:
+      typeof event.sessionId === "string" && event.sessionId.length <= 200
+        ? event.sessionId
+        : "unknown",
+    path: "<redacted>",
+    rxBytes: safeCount(event.rxBytes),
+    txBytes: safeCount(event.txBytes),
+    bytesLost: safeCount(event.bytesLost),
+    durationMs: safeCount(Math.round(event.durationMs)),
+  };
+}
+
+export function createSerialSessionLogger({
+  write = (line) => process.stderr.write(line),
+  now = Date.now,
+} = {}) {
+  return (event) => {
+    const record = formatSerialSessionLog(event, { now });
+    if (!record) return;
+    write(`${JSON.stringify(record)}\n`);
+  };
+}
