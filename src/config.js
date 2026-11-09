@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseSerialAllow } from "./serial/allowlist.js";
 
 const CONFIG_FILE = "config.json";
 
@@ -56,4 +57,14 @@ export async function updateConfig(update, options = {}) {
     typeof update === "function" ? update(current) : { ...current, ...update };
   await saveConfig(next, options);
   return next;
+}
+
+/**
+ * `--serial-allow` 覆盖已保存的列表；空字符串清空；未提供则沿用配置。
+ * 默认（无配置）为空，即拒绝所有串口。
+ */
+export function resolveSerialAllow({ flag, saved } = {}) {
+  if (flag === true)
+    throw new Error('--serial-allow requires a value (use "" to clear)');
+  return parseSerialAllow(flag === undefined ? saved : flag);
 }

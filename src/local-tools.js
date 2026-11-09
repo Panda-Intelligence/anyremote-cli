@@ -15,6 +15,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { ToolError, toToolError } from "./errors.js";
 import { defaultShell } from "./platform.js";
 import { captureScreen } from "./screen-capture.js";
+import { parseSerialAllow } from "./serial/allowlist.js";
+import { createSerialBinding } from "./serial/binding.js";
+import { SerialSessionManager } from "./serial/sessions.js";
 
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
 const DEFAULT_MAX_SEARCH_FILES = 10_000;
@@ -335,6 +338,15 @@ export class LocalToolExecutor {
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     maxSearchFiles = DEFAULT_MAX_SEARCH_FILES,
     screenCapture = captureScreen,
+    serialBinding = createSerialBinding(),
+    serialAllow = [],
+    streamCoalesceMs,
+    streamEnabled,
+    deviceId,
+    serialRealpath,
+    serialPlatform,
+    serialExists,
+    onSerialSessionClosed,
   } = {}) {
     this.maxReadBytes = maxReadBytes;
     this.maxOutputBytes = maxOutputBytes;
@@ -343,6 +355,38 @@ export class LocalToolExecutor {
     this.processes = new Map();
     this.nextProcessId = 1;
     this.shutdownPromise = null;
+    this.serial = new SerialSessionManager({
+      binding: serialBinding,
+      allow: parseSerialAllow(serialAllow),
+      streamCoalesceMs,
+      streamEnabled,
+      deviceId,
+      realpath: serialRealpath,
+      platform: serialPlatform,
+      exists: serialExists,
+      onSessionClosed: onSerialSessionClosed,
+    });
+  }
+
+  /** 异步探测 serial 模块；在 hello 之前调用，capabilities() 才准确。 */
+  prepare() {
+    return this.serial.prepare();
+  }
+
+  capabilities() {
+    return this.serial.capabilities();
+  }
+
+  serialSessions() {
+    return this.serial.announcedSessions();
+  }
+
+  setDeviceId(deviceId) {
+    this.serial.deviceId = deviceId;
+  }
+
+  handleStreamFrame(frame, sink) {
+    this.serial.handleStreamFrame(frame, sink);
   }
 
   async execute(tool, input, options = {}) {
@@ -373,6 +417,22 @@ export class LocalToolExecutor {
           return this.listProcesses();
         case "process.stop":
           return await this.stopProcess(args);
+        case "serial.ports":
+          return await this.serial.ports();
+        case "serial.open":
+          return await this.serial.open(args);
+        case "serial.read":
+          return await this.serial.read(args, options);
+        case "serial.write":
+          return await this.serial.write(args, options);
+        case "serial.transact":
+          return await this.serial.transact(args, options);
+        case "serial.control":
+          return await this.serial.control(args);
+        case "serial.close":
+          return await this.serial.close(args);
+        case "serial.sessions":
+          return this.serial.list();
         default:
           throw new ToolError("NOT_FOUND", `unknown tool: ${tool}`);
       }
@@ -755,6 +815,7 @@ export class LocalToolExecutor {
     if (this.shutdownPromise) return this.shutdownPromise;
     // 只终止本实例仍持有的任务；断线重连不调用此终结操作。
     this.shutdownPromise = (async () => {
+      await this.serial.shutdown();
       const active = [...this.processes.values()].filter(
         (state) => !state.finishedAt,
       );

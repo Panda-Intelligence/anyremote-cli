@@ -4,12 +4,22 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { DeviceAgent } from "./agent.js";
 import { ApiClient } from "./client.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { loadConfig, resolveSerialAllow, saveConfig } from "./config.js";
 import { resolveDeviceName } from "./device-name.js";
 import { createLocalToolExecutor } from "./local-tools.js";
 import { detectPlatform } from "./platform.js";
 import { enrollRemoteDevice } from "./remote.js";
-import { createRequestLogger } from "./request-log.js";
+import {
+  createRequestLogger,
+  createSerialSessionLogger,
+} from "./request-log.js";
+import { runSerialAttach } from "./serial/attach.js";
+import {
+  createSerialBinding,
+  detectSerialRuntime,
+  SERIAL_BUN_UNSUPPORTED_MESSAGE,
+} from "./serial/binding.js";
+import { SerialSessionManager } from "./serial/sessions.js";
 import { updateBunxCliIfNeeded } from "./update.js";
 import { CLI_PACKAGE_NAME, CLI_VERSION } from "./version.js";
 
@@ -63,6 +73,9 @@ function publicConfig(config) {
     device: config.device,
     hasAccessToken: Boolean(config.accessToken),
     hasSession: Boolean(config.sessionCookie),
+    serialAllowCount: Array.isArray(config.serialAllow)
+      ? config.serialAllow.length
+      : 0,
   };
 }
 
@@ -100,17 +113,75 @@ function help() {
       "  revoke                     Revoke the saved device",
       "  disconnect                 Revoke a saved device (alias)",
       "  doctor                     Check local runtime",
+      "  serial ports               List local serial ports and show which are allowed",
+      "  serial attach              Attach another computer's serial port locally (RFC2217, raw TCP, PTY)",
       "  version                    Show the CLI version",
+      "",
+      "serial attach options (run `anyremote remote` on this computer first):",
+      "      --device <id|name>      Computer that owns the serial port (ids always work; names need a saved login)",
+      "      --path <port>           Serial port on that computer (must be allowed by its --serial-allow)",
+      "      --baud <n> --data <5-8> --parity <none|even|odd|mark|space> --stop <1|1.5|2> --flow <none|rtscts|xonxoff>",
+      "      --rfc2217-port <n>      Local RFC2217 port (default 4000; 0 = any free port)",
+      "      --raw-port <n>          Local raw TCP port (default 0 = any free port)",
+      "      --pty <link>            Also create a PTY at <link> (needs socat; fixed parameters)",
+      "      --control-coalesce-ms <n> Window that batches DTR/RTS changes into one timed sequence, 0-1000 (default 250; 0 = send immediately)",
+      "      --session <id>          Resume a session within 15 s of a dropped connection",
       "",
       "Options:",
       "  -h, --help                 Show this help",
       "  -v, --version              Show the CLI version",
       "      --agent-version <value> Override the version reported by this agent",
+      "      --serial-allow <globs>  Expose matching serial ports (comma separated; remote/connect; default none)",
+      "      --stream-coalesce-ms <n> Serial stream batching window, 2-50 ms (default 10)",
       "",
       "Environment:",
       "  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD",
     ].join("\n"),
   );
+}
+
+/** `serial attach`：使用本机已登记的设备凭据，把远端串口接到本地 RFC2217 / raw TCP / PTY。 */
+async function serialAttach(flags, config) {
+  const attach = await runSerialAttach(flags, { config, env: process.env });
+  const { events } = attach;
+  const interactive = Boolean(process.stderr.isTTY);
+  const line = (text) =>
+    process.stderr.write(interactive ? `\r\x1b[K${text}` : `${text}\n`);
+  const urls = attach.urls;
+  print(
+    [
+      `Attached to ${flags.device}${flags.path ? ` (${flags.path})` : ""} as session ${attach.sessionId}`,
+      `  RFC2217: ${urls.rfc2217}   (esptool --port ${urls.rfc2217}, pySerial serial_for_url)`,
+      `  raw TCP: ${urls.raw}`,
+      ...(urls.pty ? [`  PTY:     ${urls.pty}`] : []),
+      "Press Ctrl-C to close the session. Resume within 15 s of a drop with --session.",
+    ].join("\n"),
+  );
+  let quietUntil = 0;
+  events.on("status", (text) => {
+    if (interactive || Date.now() >= quietUntil) line(text);
+    if (!interactive) quietUntil = Date.now() + 10_000;
+  });
+  events.on("warning", (message) => process.stderr.write(`\n${message}\n`));
+  events.on("state", (state) => {
+    if (state === "reconnecting")
+      process.stderr.write("\nConnection dropped; resuming the session...\n");
+  });
+  const stop = () => void attach.close();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  const result = await attach.closed;
+  process.removeListener("SIGINT", stop);
+  process.removeListener("SIGTERM", stop);
+  if (interactive) process.stderr.write("\n");
+  const { stats } = result;
+  print(
+    `Closed (${result.reason}). rx ${stats.rxBytes} B, tx ${stats.txBytes} B, bytesLost ${stats.bytesLost}${stats.lossUnknown ? " (loss unknown)" : ""}.`,
+  );
+  if (result.error) {
+    process.exitCode = 1;
+    process.stderr.write(`${result.error.message}\n`);
+  }
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -136,6 +207,32 @@ async function main(argv = process.argv.slice(2)) {
         : undefined;
   const command = parsed.positional[0] || "remote";
   const config = await loadConfig();
+  const serialAllow = resolveSerialAllow({
+    flag: parsed.flags.serial_allow,
+    saved: config.serialAllow,
+  });
+  if (
+    serialAllow.length > 0 &&
+    detectSerialRuntime() === "bun" &&
+    ((command === "serial" && parsed.positional[1] !== "attach") ||
+      command === "remote" ||
+      command === "connect")
+  )
+    console.error(`Warning: ${SERIAL_BUN_UNSUPPORTED_MESSAGE}`);
+  if (command === "serial") {
+    const subcommand = parsed.positional[1];
+    if (subcommand === "attach") return serialAttach(parsed.flags, config);
+    if (subcommand !== "ports")
+      throw new Error("Usage: anyremote serial <ports|attach>");
+    const manager = new SerialSessionManager({
+      binding: createSerialBinding(),
+      allow: serialAllow,
+    });
+    return print({
+      allowCount: serialAllow.length,
+      ports: await manager.candidates(),
+    });
+  }
   const baseUrl = resolveBaseUrl({
     command,
     explicit: parsed.flags.base_url,
@@ -262,6 +359,21 @@ async function main(argv = process.argv.slice(2)) {
     return print({ ...(result || {}), revoked: true, deviceId });
   }
   if (command === "remote" || command === "connect") {
+    if (parsed.flags.serial_allow !== undefined) {
+      config.serialAllow = serialAllow;
+      await saveConfig(config);
+    }
+    const streamCoalesceMs =
+      parsed.flags.stream_coalesce_ms === undefined
+        ? undefined
+        : Number(parsed.flags.stream_coalesce_ms);
+    if (
+      streamCoalesceMs !== undefined &&
+      (!Number.isInteger(streamCoalesceMs) ||
+        streamCoalesceMs < 2 ||
+        streamCoalesceMs > 50)
+    )
+      throw new Error("--stream-coalesce-ms must be an integer from 2 to 50");
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
@@ -294,13 +406,19 @@ async function main(argv = process.argv.slice(2)) {
       }
       if (!paired.device?.id || !paired.deviceToken)
         throw new Error("Pair a device first");
+      const executor = createLocalToolExecutor({
+        serialAllow,
+        streamCoalesceMs,
+        onSerialSessionClosed: createSerialSessionLogger(),
+      });
+      await executor.prepare();
       agent = new DeviceAgent({
         apiClient: api,
         deviceId: paired.device.id,
         deviceToken: paired.deviceToken,
         deviceName: paired.device.name,
         agentVersion: agentVersionOverride || CLI_VERSION,
-        executor: createLocalToolExecutor(),
+        executor,
       });
       agent.on("connected", (event) => print(event));
       agent.on("disconnected", (event) => print(event));

@@ -137,3 +137,32 @@ The `screen.capture` tool captures the primary desktop on the target computer. I
 On macOS, allow the terminal app to record the screen the first time you use this tool. On Linux, install `grim`, `gnome-screenshot`, or `scrot`. On Windows, the CLI uses PowerShell to capture the primary display.
 
 The tool returns a structured error if there is no desktop session, the operating system denies permission, or the image cannot be compressed below the size limit. An MCP client may support image blocks without displaying them in its interface. Check the behavior of your MCP client.
+
+## Serial ports
+
+<!-- 2026-11-08 · Claude：CLI 0.3.0 新增串口能力；默认关闭，需显式 --serial-allow。 -->
+
+Serial access is off by default. Start the CLI with `--serial-allow "<glob>[,<glob>...]"` on `remote` or `connect` to expose matching USB-serial ports. The flag replaces the saved list for that run and is saved to the config file; `--serial-allow ""` clears it. Only `*` and `?` are wildcards. A pattern matches the raw path or the resolved (`realpath`) path. On macOS, `/dev/cu.*` and `/dev/tty.*` are separate device nodes; allow the `cu` form. On Windows use `COM3` or `COM*`.
+
+```bash
+anyremote serial ports                 # list local ports and mark the allowed ones
+anyremote remote --serial-allow "/dev/cu.usbserial-*,/dev/ttyACM?"
+```
+
+`serial.ports`, `serial.open`, `serial.read`, `serial.write`, `serial.transact`, `serial.control`, `serial.close`, and `serial.sessions` need CLI 0.3.0. Each port has one holder at a time (`SERIAL_PORT_BUSY` otherwise). Received bytes are kept in a per-session ring buffer (64 KiB to 4 MiB); read it by byte cursor, like process output. Reads and writes are limited to 64 KiB, waits to 10 s, and a session closes after an idle timeout (default 10 minutes) or when the device is unplugged (`SERIAL_PORT_LOST`). Stream mode batches received bytes (16 KiB or `--stream-coalesce-ms`, 2 to 50, default 10) and honours a 256 KiB credit window.
+
+### Attach a remote serial port locally
+
+<!-- 2026-11-08 · Claude：CLI 0.3.1 新增 serial attach；消费者机器复用已登记的设备凭据。 -->
+
+Run `anyremote remote` once on the machine that should use the port (machine A), then:
+
+```bash
+anyremote serial attach --device <id|name> --path /dev/cu.usbserial-1420 [--baud 115200] \
+  [--rfc2217-port 4000] [--raw-port 0] [--pty ~/.anyremote/tty/esp32]
+esptool --port rfc2217://127.0.0.1:4000 chip_id
+```
+
+The command prints a local `rfc2217://`, a raw `socket://` and an optional PTY (needs `socat`; fixed parameters, baud and DTR/RTS changes made through the PTY are not forwarded). Listeners bind to `127.0.0.1` only and accept one RFC2217 client at a time. Device ids always work for `--device`; names need a saved `anyremote login`. The first DTR/RTS change opens a 250 ms window (`--control-coalesce-ms`, 0 to 1000; 0 sends every change immediately); all changes inside it are sent together as one timed sequence, so esptool reset sequences keep their timing on the device. An isolated change therefore takes effect about 250 ms later. The status line shows received and sent bytes, `bytesLost` (explicit, never silent) and a round-trip estimate to the relay. After a dropped connection the command resumes by itself for about 15 s; `--session <id>` resumes by hand. Ctrl-C closes the session and frees the port. Opening a stream counts as one metered call and one concurrent serial session of your plan.
+
+Serial access requires the Node runtime (`npx @panda-ai/anyremote@latest remote --serial-allow ...` or `node dist/bin.js`). Under `bunx` (Bun 1.4) the CLI prints a warning, does not advertise the `serial` capability, and serial tools return a configuration error, because Bun cannot open serial ports yet. The CLI loads the optional native `serialport` module only when serial access is enabled. If it cannot load, serial tools report a configuration error and the device does not advertise the `serial` capability. The request log never records serial data, device paths, or arguments; closing a session writes one counters line (bytes received, sent, lost, duration) with the path redacted. Changing data bits, parity, or stop bits on an open port is not supported; close and reopen the session.
