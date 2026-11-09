@@ -8,6 +8,8 @@ import {
   MAX_SCREEN_CAPTURE_BYTES,
   MAX_STREAM_FRAME_BYTES,
   MIN_SERIAL_AGENT_VERSION,
+  SERIAL_STREAM_GRACE_MS,
+  STREAM_CLOSE_RECLAIMED,
   screenCaptureResultSchema,
   serialControlSchema,
   serialOpenParamsSchema,
@@ -15,6 +17,7 @@ import {
   serialReadResultSchema,
   serialSessionSchema,
   streamFrameSchema,
+  streamHelloPayloadSchema,
   success,
 } from "../src/index.js";
 
@@ -308,5 +311,33 @@ describe("shared contracts", () => {
         }),
       ).toThrow();
     });
+  });
+  test("consumer stream hello takes exactly one of open or resume", () => {
+    const sessionId = "7f1c2e4a-3b5d-4c6e-8f90-a1b2c3d4e5f6";
+    const opened = streamHelloPayloadSchema.parse({
+      open: { path: "/dev/ttyUSB0" },
+    });
+    expect(opened.open?.baudRate).toBe(115_200);
+    expect(
+      streamHelloPayloadSchema.parse({ resume: { sessionId, lastSeq: -1 } })
+        .resume?.lastSeq,
+    ).toBe(-1);
+    expect(() => streamHelloPayloadSchema.parse({})).toThrow();
+    expect(() =>
+      streamHelloPayloadSchema.parse({
+        open: { path: "/dev/x" },
+        resume: { sessionId, lastSeq: 0 },
+      }),
+    ).toThrow();
+    expect(() =>
+      streamHelloPayloadSchema.parse({
+        resume: { sessionId: "nope", lastSeq: 0 },
+      }),
+    ).toThrow();
+    expect(() =>
+      streamHelloPayloadSchema.parse({ open: { path: "/dev/x", extra: 1 } }),
+    ).toThrow();
+    expect(SERIAL_STREAM_GRACE_MS).toBe(15_000);
+    expect(STREAM_CLOSE_RECLAIMED).toBe(4001);
   });
 });

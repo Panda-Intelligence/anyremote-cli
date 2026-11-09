@@ -140,6 +140,18 @@ export class ApiClient {
     );
   }
 
+  serialStreamUrl(deviceId, { resume } = {}) {
+    const url = new URL(
+      websocketUrl(
+        this.baseUrl,
+        `/api/devices/${encodeURIComponent(deviceId)}/serial/stream`,
+      ),
+    );
+    // 续传同一个会话时带上 id，Worker 据此免计量、免并发名额。
+    if (resume) url.searchParams.set("resume", resume);
+    return url.toString();
+  }
+
   newRequestId() {
     return randomUUID();
   }

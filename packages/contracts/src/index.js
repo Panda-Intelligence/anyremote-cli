@@ -428,6 +428,34 @@ export const streamFrameSchema = z
       });
   });
 
+/** 消费者连接断开后到 DO 关闭设备端会话之间的宽限期（可用 resume 取消）。 */
+export const SERIAL_STREAM_GRACE_MS = 15_000;
+/** 被 MCP `serial.close{force}` 或控制台回收时，DO 关闭消费者 WebSocket 使用的 close code。 */
+export const STREAM_CLOSE_RECLAIMED = 4001;
+
+/**
+ * 消费者（另一台已登记设备）在 `/serial/stream` 上发送的 hello 载荷：
+ * 新开会话（`open`）或在宽限期内续传（`resume`），两者恰好其一。
+ */
+export const streamHelloPayloadSchema = z
+  .object({
+    open: serialOpenParamsSchema.optional(),
+    resume: z
+      .object({
+        sessionId: z.string().uuid(),
+        lastSeq: z.number().int().min(-1),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (value) => (value.open === undefined) !== (value.resume === undefined),
+    {
+      message: "hello requires exactly one of open or resume",
+    },
+  );
+
 export const helloPayloadSchema = z.looseObject({
   deviceToken: z.string().optional(),
   name: z.string().optional(),
@@ -464,6 +492,7 @@ export const connectionEnvelopeSchema = z.object({
 /** @typedef {z.infer<typeof serialReadResultSchema>} SerialReadResult */
 /** @typedef {z.infer<typeof streamFrameSchema>} StreamFrame */
 /** @typedef {z.infer<typeof helloPayloadSchema>} HelloPayload */
+/** @typedef {z.infer<typeof streamHelloPayloadSchema>} StreamHelloPayload */
 /** @template T @typedef {{data: T}} ApiSuccess */
 /** @typedef {{error: ApiError}} ApiFailure */
 

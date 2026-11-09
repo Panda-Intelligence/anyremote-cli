@@ -13,6 +13,7 @@ import {
   createRequestLogger,
   createSerialSessionLogger,
 } from "./request-log.js";
+import { runSerialAttach } from "./serial/attach.js";
 import {
   createSerialBinding,
   detectSerialRuntime,
@@ -113,7 +114,18 @@ function help() {
       "  disconnect                 Revoke a saved device (alias)",
       "  doctor                     Check local runtime",
       "  serial ports               List local serial ports and show which are allowed",
+      "  serial attach              Attach another computer's serial port locally (RFC2217, raw TCP, PTY)",
       "  version                    Show the CLI version",
+      "",
+      "serial attach options (run `anyremote remote` on this computer first):",
+      "      --device <id|name>      Computer that owns the serial port (ids always work; names need a saved login)",
+      "      --path <port>           Serial port on that computer (must be allowed by its --serial-allow)",
+      "      --baud <n> --data <5-8> --parity <none|even|odd|mark|space> --stop <1|1.5|2> --flow <none|rtscts|xonxoff>",
+      "      --rfc2217-port <n>      Local RFC2217 port (default 4000; 0 = any free port)",
+      "      --raw-port <n>          Local raw TCP port (default 0 = any free port)",
+      "      --pty <link>            Also create a PTY at <link> (needs socat; fixed parameters)",
+      "      --control-coalesce-ms <n> Window that batches DTR/RTS changes into one timed sequence, 0-1000 (default 250; 0 = send immediately)",
+      "      --session <id>          Resume a session within 15 s of a dropped connection",
       "",
       "Options:",
       "  -h, --help                 Show this help",
@@ -126,6 +138,50 @@ function help() {
       "  ANYREMOTE_URL, ANYREMOTE_TOKEN, ANYREMOTE_EMAIL, ANYREMOTE_PASSWORD",
     ].join("\n"),
   );
+}
+
+/** `serial attach`：使用本机已登记的设备凭据，把远端串口接到本地 RFC2217 / raw TCP / PTY。 */
+async function serialAttach(flags, config) {
+  const attach = await runSerialAttach(flags, { config, env: process.env });
+  const { events } = attach;
+  const interactive = Boolean(process.stderr.isTTY);
+  const line = (text) =>
+    process.stderr.write(interactive ? `\r\x1b[K${text}` : `${text}\n`);
+  const urls = attach.urls;
+  print(
+    [
+      `Attached to ${flags.device}${flags.path ? ` (${flags.path})` : ""} as session ${attach.sessionId}`,
+      `  RFC2217: ${urls.rfc2217}   (esptool --port ${urls.rfc2217}, pySerial serial_for_url)`,
+      `  raw TCP: ${urls.raw}`,
+      ...(urls.pty ? [`  PTY:     ${urls.pty}`] : []),
+      "Press Ctrl-C to close the session. Resume within 15 s of a drop with --session.",
+    ].join("\n"),
+  );
+  let quietUntil = 0;
+  events.on("status", (text) => {
+    if (interactive || Date.now() >= quietUntil) line(text);
+    if (!interactive) quietUntil = Date.now() + 10_000;
+  });
+  events.on("warning", (message) => process.stderr.write(`\n${message}\n`));
+  events.on("state", (state) => {
+    if (state === "reconnecting")
+      process.stderr.write("\nConnection dropped; resuming the session...\n");
+  });
+  const stop = () => void attach.close();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  const result = await attach.closed;
+  process.removeListener("SIGINT", stop);
+  process.removeListener("SIGTERM", stop);
+  if (interactive) process.stderr.write("\n");
+  const { stats } = result;
+  print(
+    `Closed (${result.reason}). rx ${stats.rxBytes} B, tx ${stats.txBytes} B, bytesLost ${stats.bytesLost}${stats.lossUnknown ? " (loss unknown)" : ""}.`,
+  );
+  if (result.error) {
+    process.exitCode = 1;
+    process.stderr.write(`${result.error.message}\n`);
+  }
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -158,12 +214,16 @@ async function main(argv = process.argv.slice(2)) {
   if (
     serialAllow.length > 0 &&
     detectSerialRuntime() === "bun" &&
-    (command === "serial" || command === "remote" || command === "connect")
+    ((command === "serial" && parsed.positional[1] !== "attach") ||
+      command === "remote" ||
+      command === "connect")
   )
     console.error(`Warning: ${SERIAL_BUN_UNSUPPORTED_MESSAGE}`);
   if (command === "serial") {
-    if (parsed.positional[1] !== "ports")
-      throw new Error("Usage: anyremote serial ports");
+    const subcommand = parsed.positional[1];
+    if (subcommand === "attach") return serialAttach(parsed.flags, config);
+    if (subcommand !== "ports")
+      throw new Error("Usage: anyremote serial <ports|attach>");
     const manager = new SerialSessionManager({
       binding: createSerialBinding(),
       allow: serialAllow,
