@@ -143,7 +143,7 @@ test("remote reauthorizes a saved device without overwriting its server name", a
   sockets.on("connection", (socket) => {
     socket.once("message", (data) => {
       hello = JSON.parse(data.toString());
-      socket.close(1008, "test complete");
+      socket.close(1008, "device revoked (test complete)");
     });
   });
   server.listen(0, "127.0.0.1");
@@ -180,7 +180,7 @@ test("remote reauthorizes a saved device without overwriting its server name", a
     assert.equal(hello.deviceId, saved.device.id);
     assert.deepEqual(
       JSON.parse(await readFile(path.join(directory, "config.json"), "utf8")),
-      { baseUrl },
+      { baseUrl, device: { id: "saved-device", name: "用户已命名" } },
     );
   } finally {
     for (const socket of sockets.clients) socket.terminate();
@@ -204,7 +204,7 @@ test("connect uses saved credentials without starting a new authorization", asyn
   sockets.on("connection", (socket) => {
     socket.once("message", (data) => {
       hello = JSON.parse(data.toString());
-      socket.close(1008, "test complete");
+      socket.close(1008, "device revoked (test complete)");
     });
   });
   server.listen(0, "127.0.0.1");
@@ -337,16 +337,18 @@ test("revoked remote credentials are cleared and the next remote enrolls again",
     );
     assert.match(
       first.stderr,
-      /Saved device credentials were cleared\. Run remote again/,
+      /The saved device token was cleared\. Run remote again/,
     );
     const cleared = JSON.parse(
       await readFile(path.join(directory, "config.json"), "utf8"),
     );
+    // The device record stays so the next remote can offer its id; only the token goes.
     assert.deepEqual(cleared, {
       baseUrl,
       accessToken: saved.accessToken,
       sessionCookie: saved.sessionCookie,
       language: saved.language,
+      device: { id: "replacement-device", name: "不要覆盖" },
     });
 
     replacementProcess = spawn(
@@ -359,11 +361,13 @@ test("revoked remote credentials are cleared and the next remote enrolls again",
       '"status": "approved"',
     );
     assert.match(output, /replacement-device/);
-    assert.equal(enrollments.length, 3);
+    assert.equal(enrollments.length, 4);
     assert.equal(enrollments[0].existingDeviceId, saved.device.id);
     assert.equal(Object.hasOwn(enrollments[1], "existingDeviceId"), false);
-    assert.equal(Object.hasOwn(enrollments[2], "existingDeviceId"), false);
-    assert.notEqual(enrollments[2].enrollmentId, undefined);
+    // The kept id is offered again; the server's 404 makes the CLI enroll afresh.
+    assert.equal(enrollments[2].existingDeviceId, "replacement-device");
+    assert.equal(Object.hasOwn(enrollments[3], "existingDeviceId"), false);
+    assert.notEqual(enrollments[3].enrollmentId, undefined);
     const replacement = JSON.parse(
       await readFile(path.join(directory, "config.json"), "utf8"),
     );

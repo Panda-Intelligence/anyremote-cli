@@ -11,6 +11,8 @@ import { serializeToolError } from "./errors.js";
 import { detectPlatform } from "./platform.js";
 import { CLI_VERSION } from "./version.js";
 
+const PENDING_SEND_MAX_ENTRIES = 256;
+const PENDING_SEND_MAX_BYTES = 1_000_000;
 const MAX_COMPLETED_REQUESTS = 1024;
 const COMPLETED_RESULT_RETENTION_MS = 60_000;
 const MAX_COMPLETED_RESULT_BYTES = 8 * 1024 * 1024;
@@ -85,6 +87,13 @@ export class DeviceAgent extends EventEmitter {
     this.activeScreenCaptures = 0;
     this.completedCleanupTimer = null;
     this.inFlight = new Set();
+    // Nothing but the hello leaves the socket until the server has acked it:
+    // the ack carries the connection epoch every later envelope must repeat.
+    // Frames produced meanwhile (serial streams, results) wait here, bounded.
+    this.handshaken = false;
+    this.pendingSends = [];
+    this.pendingSendBytes = 0;
+    this.droppedWhileConnecting = 0;
     this.executor.setDeviceId?.(deviceId);
     this.streamSink = (frame) => this.send("stream", frame.sessionId, frame);
   }
@@ -107,6 +116,7 @@ export class DeviceAgent extends EventEmitter {
     const socket = this.socket;
     this.socket = null;
     this.socketAlive = false;
+    this.handshaken = false;
     if (socket) {
       // 对端不回应 close 时，不能让 WebSocket 的默认长超时拖住 CLI 退出。
       const deadline = setTimeout(() => socket.terminate(), 1000);
@@ -166,6 +176,7 @@ export class DeviceAgent extends EventEmitter {
     if (!socket || this.socket !== socket) return;
     this.socketOpenedAt = performance.now();
     this.socketAlive = true;
+    this.handshaken = false;
     const capabilities = this.executor.capabilities?.() ?? [];
     const sessions = this.executor.serialSessions?.() ?? [];
     if (
@@ -193,12 +204,21 @@ export class DeviceAgent extends EventEmitter {
     this.heartbeatTimer = null;
     this.socket = null;
     this.socketAlive = false;
-    this.emit("disconnected", { code, reason: reason?.toString() });
-    if (code === 1008) {
+    this.handshaken = false;
+    const reasonText = reason?.toString() ?? "";
+    this.emit("disconnected", { code, reason: reasonText });
+    // 1008 is also what the server uses for protocol slips ("invalid envelope",
+    // "connection epoch conflict"); only an explicit revocation ends the agent.
+    if (code === 1008 && /revoke/i.test(reasonText)) {
       this.stop();
       this.emit("revoked");
       return;
     }
+    if (code === 1008)
+      this.emit(
+        "protocolError",
+        new Error(`server closed the connection: ${reasonText || "policy"}`),
+      );
     this.scheduleReconnect();
   }
 
@@ -228,6 +248,8 @@ export class DeviceAgent extends EventEmitter {
   send(type, requestId, payload) {
     if (!this.socket || this.socket.readyState !== this.WebSocketImpl.OPEN)
       return false;
+    if (type !== "hello" && !this.handshaken)
+      return this.defer(type, requestId, payload);
     const envelope = {
       version: PROTOCOL_VERSION,
       type,
@@ -241,6 +263,43 @@ export class DeviceAgent extends EventEmitter {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** Queue an envelope until the hello ack; oldest stream frames give way when full. */
+  defer(type, requestId, payload) {
+    const bytes = JSON.stringify(payload ?? null).length;
+    if (bytes > PENDING_SEND_MAX_BYTES) {
+      this.droppedWhileConnecting += 1;
+      return false;
+    }
+    while (
+      this.pendingSends.length > 0 &&
+      (this.pendingSends.length >= PENDING_SEND_MAX_ENTRIES ||
+        this.pendingSendBytes + bytes > PENDING_SEND_MAX_BYTES)
+    ) {
+      const index = this.pendingSends.findIndex(
+        (entry) => entry.type === "stream",
+      );
+      if (index < 0) {
+        this.droppedWhileConnecting += 1;
+        return false;
+      }
+      const [dropped] = this.pendingSends.splice(index, 1);
+      this.pendingSendBytes -= dropped.bytes;
+      this.droppedWhileConnecting += 1;
+    }
+    this.pendingSends.push({ type, requestId, payload, bytes });
+    this.pendingSendBytes += bytes;
+    return true;
+  }
+
+  flushPendingSends() {
+    const pending = this.pendingSends;
+    this.pendingSends = [];
+    this.pendingSendBytes = 0;
+    for (const entry of pending) {
+      if (!this.send(entry.type, entry.requestId, entry.payload)) break;
     }
   }
 
@@ -337,6 +396,7 @@ export class DeviceAgent extends EventEmitter {
         envelope.payload.accepted === true
       ) {
         this.connectionEpoch = envelope.connectionEpoch;
+        this.handshaken = true;
         this.reconnectAttempt = 0;
         clearTimeout(this.connectTimer);
         this.connectTimer = null;
@@ -350,7 +410,12 @@ export class DeviceAgent extends EventEmitter {
           openMs: openedAt - startedAt,
           helloMs: connectedAt - openedAt,
           elapsedMs: connectedAt - startedAt,
+          ...(this.droppedWhileConnecting > 0
+            ? { droppedWhileConnecting: this.droppedWhileConnecting }
+            : {}),
         });
+        this.droppedWhileConnecting = 0;
+        this.flushPendingSends();
         this.heartbeatTimer = setInterval(() => {
           if (this.socket !== socket || this.stopping) return;
           if (socket.readyState !== this.WebSocketImpl.OPEN) {
