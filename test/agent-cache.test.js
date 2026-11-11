@@ -13,6 +13,7 @@ function createAgent(executor) {
     executor,
     WebSocketImpl: MockWebSocket,
   });
+  agent.handshaken = true;
   agent.socket = {
     readyState: MockWebSocket.OPEN,
     send(raw) {

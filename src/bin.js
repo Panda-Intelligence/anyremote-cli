@@ -423,18 +423,18 @@ async function main(argv = process.argv.slice(2)) {
       agent.on("connected", (event) => print(event));
       agent.on("disconnected", (event) => print(event));
       agent.on("error", (error) => process.stderr.write(`${error.message}\n`));
+      agent.on("protocolError", (error) =>
+        process.stderr.write(`${error.message}\n`),
+      );
       agent.on("request", createRequestLogger());
       agent.on("revoked", () => {
         void (async () => {
           try {
-            await saveConfig({
-              ...paired,
-              baseUrl,
-              device: undefined,
-              deviceToken: undefined,
-            });
+            // Keep the device record: the next `remote` offers its id as
+            // existingDeviceId and the server decides whether it is reusable.
+            await saveConfig({ ...paired, baseUrl, deviceToken: undefined });
             process.stderr.write(
-              "Device authorization was revoked. Saved device credentials were cleared. Run remote again to register this computer.\n",
+              "Device authorization was revoked. The saved device token was cleared. Run remote again to approve this computer; its device id is kept when the server still accepts it.\n",
             );
           } catch (error) {
             process.stderr.write(
