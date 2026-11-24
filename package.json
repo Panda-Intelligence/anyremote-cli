@@ -52,5 +52,9 @@
   },
   "engines": {
     "node": ">=20.9.0"
+  },
+  "overrides": {
+    "@hono/node-server": "2.1.6",
+    "hono": "4.13.16"
   }
 }
