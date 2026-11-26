@@ -8,7 +8,7 @@ import { loadConfig, resolveSerialAllow, saveConfig } from "./config.js";
 import { resolveDeviceName } from "./device-name.js";
 import { createLocalToolExecutor } from "./local-tools.js";
 import { detectPlatform } from "./platform.js";
-import { enrollRemoteDevice } from "./remote.js";
+import { applicationOrigin, enrollRemoteDevice } from "./remote.js";
 import {
   createRequestLogger,
   createSerialSessionLogger,
@@ -89,21 +89,38 @@ function clearConfigFields(config, fields) {
   return next;
 }
 
+function savedApplicationOrigin(baseUrl) {
+  try {
+    return applicationOrigin(baseUrl);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasDeviceCredentials(config) {
+  return (
+    typeof config.device?.id === "string" &&
+    config.device.id.trim().length > 0 &&
+    typeof config.deviceToken === "string" &&
+    config.deviceToken.trim().length > 0
+  );
+}
+
 function help() {
   print(
     [
-      "Quick connect: anyremote [--base-url <application-origin>] [--name <computer>] [--no-browser]",
+      "Quick connect: anyremote [--base-url <application-origin>] [--name <computer>] [--no-browser] [--reauth]",
       "",
       "AnyRemote CLI",
       "",
       "Usage: anyremote [<command>] [options]",
       "",
-      "With no command, AnyRemote authorizes and connects this computer to https://anyremote.dev.",
-      "New remote flows use --base-url, ANYREMOTE_URL, then the production origin.",
+      "With no command, AnyRemote resumes or authorizes this computer on https://anyremote.dev.",
+      "Remote uses --base-url, ANYREMOTE_URL, then production; matching saved device credentials are reused.",
       "Other commands reuse the saved origin where applicable. Use ANYREMOTE_CONFIG_DIR for another configuration.",
       "",
       "Commands:",
-      "  remote                     Authorize and connect this computer",
+      "  remote                     Resume or authorize and connect this computer",
       "  pair                       Create a pairing request",
       "  login                      Save an AnyRemote login session",
       "  logout                     End the saved account session",
@@ -131,6 +148,7 @@ function help() {
       "  -h, --help                 Show this help",
       "  -v, --version              Show the CLI version",
       "      --agent-version <value> Override the version reported by this agent",
+      "      --reauth               Require browser authorization for remote, even with saved credentials",
       "      --serial-allow <globs>  Expose matching serial ports (comma separated; remote/connect; default none)",
       "      --stream-coalesce-ms <n> Serial stream batching window, 2-50 ms (default 10)",
       "",
@@ -184,6 +202,76 @@ async function serialAttach(flags, config) {
   }
 }
 
+/** One transport attempt owns its executor; enrollment recovery starts a new one. */
+async function runDeviceSession({
+  api,
+  paired,
+  serialAllow,
+  streamCoalesceMs,
+  agentVersion,
+  signal,
+  resumed,
+  clearRevokedCredentials,
+}) {
+  const executor = createLocalToolExecutor({
+    serialAllow,
+    streamCoalesceMs,
+    onSerialSessionClosed: createSerialSessionLogger(),
+  });
+  let agent;
+  let connected = false;
+  try {
+    await executor.prepare();
+    signal.throwIfAborted();
+    agent = new DeviceAgent({
+      apiClient: api,
+      deviceId: paired.device.id,
+      deviceToken: paired.deviceToken,
+      deviceName: paired.device.name,
+      agentVersion,
+      executor,
+    });
+    agent.on("connected", (event) => {
+      const restored = resumed && !connected;
+      connected = true;
+      print({ ...event, ...(restored ? { resumed: true } : {}) });
+    });
+    agent.on("disconnected", (event) => print(event));
+    agent.on("error", (error) => process.stderr.write(`${error.message}\n`));
+    agent.on("protocolError", (error) =>
+      process.stderr.write(`${error.message}\n`),
+    );
+    agent.on("request", createRequestLogger());
+
+    const revoked = await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        signal.removeEventListener("abort", onAbort);
+        agent.off("revoked", onRevoked);
+      };
+      const finish = (wasRevoked) => {
+        cleanup();
+        resolve(wasRevoked);
+      };
+      const onAbort = () => finish(false);
+      const onRevoked = () => finish(true);
+      signal.addEventListener("abort", onAbort, { once: true });
+      agent.once("revoked", onRevoked);
+      if (signal.aborted) return onAbort();
+      try {
+        agent.start();
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
+    if (revoked) await clearRevokedCredentials();
+    return { revoked, connected };
+  } finally {
+    if (agent) await agent.shutdown();
+    else await executor.shutdown?.();
+  }
+}
+
 async function main(argv = process.argv.slice(2)) {
   if (
     await updateBunxCliIfNeeded({
@@ -233,20 +321,19 @@ async function main(argv = process.argv.slice(2)) {
       ports: await manager.candidates(),
     });
   }
-  const baseUrl = resolveBaseUrl({
+  const selectedBaseUrl = resolveBaseUrl({
     command,
     explicit: parsed.flags.base_url,
     saved: config.baseUrl,
     environment: process.env.ANYREMOTE_URL,
   });
-  const savedOrigin =
-    command === "remote" && config.baseUrl
-      ? new URL(config.baseUrl).origin
-      : undefined;
-  const originChanged = Boolean(
-    savedOrigin && savedOrigin !== new URL(baseUrl).origin,
-  );
-  const migrateSavedOrigin = command === "remote" && originChanged;
+  const baseUrl =
+    command === "remote" || command === "login"
+      ? applicationOrigin(selectedBaseUrl)
+      : selectedBaseUrl;
+  const sameOrigin = savedApplicationOrigin(config.baseUrl) === baseUrl;
+  const migrateSavedOrigin =
+    (command === "remote" || command === "login") && !sameOrigin;
   const originConfig = migrateSavedOrigin
     ? clearConfigFields(config, ["accessToken", "sessionCookie"])
     : config;
@@ -271,7 +358,9 @@ async function main(argv = process.argv.slice(2)) {
       throw new Error("--email and --password are required");
     await api.login({ email, password });
     await saveConfig({
-      ...config,
+      ...(sameOrigin
+        ? config
+        : clearConfigFields(config, ["device", "deviceToken"])),
       baseUrl,
       accessToken: api.token,
       sessionCookie: api.cookie,
@@ -378,87 +467,83 @@ async function main(argv = process.argv.slice(2)) {
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
-    let agent;
     try {
       let paired = config;
-      if (command === "remote") {
-        const enrolled = await enrollRemoteDevice({
-          baseUrl,
-          name: parsed.flags.name,
-          agentVersion: agentVersionOverride,
-          noBrowser: Boolean(parsed.flags.no_browser),
-          existingDeviceId: originChanged ? undefined : config.device?.id,
+      let resumed =
+        command === "remote" &&
+        !parsed.flags.reauth &&
+        sameOrigin &&
+        hasDeviceCredentials(paired);
+      let authorize = command === "remote" && !resumed;
+      while (!controller.signal.aborted) {
+        if (authorize) {
+          const enrolled = await enrollRemoteDevice({
+            baseUrl,
+            name: parsed.flags.name,
+            agentVersion: agentVersionOverride,
+            noBrowser: Boolean(parsed.flags.no_browser),
+            existingDeviceId: sameOrigin ? paired.device?.id : undefined,
+            signal: controller.signal,
+          });
+          controller.signal.throwIfAborted();
+          paired = {
+            ...(migrateSavedOrigin
+              ? clearConfigFields(paired, [
+                  "accessToken",
+                  "sessionCookie",
+                  "device",
+                  "deviceToken",
+                ])
+              : paired),
+            ...enrolled,
+          };
+          await saveConfig(paired);
+          print({ status: "approved", device: paired.device });
+        }
+        if (!hasDeviceCredentials(paired))
+          throw new Error("Pair a device first");
+        const result = await runDeviceSession({
+          api,
+          paired,
+          serialAllow,
+          streamCoalesceMs,
+          agentVersion: agentVersionOverride || CLI_VERSION,
           signal: controller.signal,
+          resumed,
+          clearRevokedCredentials: async () => {
+            // Keep the id for the server to decide whether it is reusable.
+            paired = { ...paired, baseUrl, deviceToken: undefined };
+            try {
+              await saveConfig(paired);
+            } catch (error) {
+              throw new Error(
+                `Device authorization was revoked, but saved credentials could not be cleared: ${error.message}`,
+              );
+            }
+          },
         });
-        paired = {
-          ...(migrateSavedOrigin
-            ? clearConfigFields(config, [
-                "accessToken",
-                "sessionCookie",
-                "device",
-                "deviceToken",
-              ])
-            : config),
-          ...enrolled,
-        };
-        await saveConfig(paired);
-        print({ status: "approved", device: paired.device });
+        if (!result.revoked) break;
+
+        if (resumed && !result.connected && !controller.signal.aborted) {
+          // Only a rejected saved identity gets one interactive recovery.
+          // Fresh authorization and live revocation must never loop.
+          resumed = false;
+          authorize = true;
+          process.stderr.write(
+            "The saved device authorization is no longer valid. Authorize this computer again.\n",
+          );
+          continue;
+        }
+        process.stderr.write(
+          "Device authorization was revoked. The saved device token was cleared. Run remote again to approve this computer; its device id is kept when the server still accepts it.\n",
+        );
+        break;
       }
-      if (!paired.device?.id || !paired.deviceToken)
-        throw new Error("Pair a device first");
-      const executor = createLocalToolExecutor({
-        serialAllow,
-        streamCoalesceMs,
-        onSerialSessionClosed: createSerialSessionLogger(),
-      });
-      await executor.prepare();
-      agent = new DeviceAgent({
-        apiClient: api,
-        deviceId: paired.device.id,
-        deviceToken: paired.deviceToken,
-        deviceName: paired.device.name,
-        agentVersion: agentVersionOverride || CLI_VERSION,
-        executor,
-      });
-      agent.on("connected", (event) => print(event));
-      agent.on("disconnected", (event) => print(event));
-      agent.on("error", (error) => process.stderr.write(`${error.message}\n`));
-      agent.on("protocolError", (error) =>
-        process.stderr.write(`${error.message}\n`),
-      );
-      agent.on("request", createRequestLogger());
-      agent.on("revoked", () => {
-        void (async () => {
-          try {
-            // Keep the device record: the next `remote` offers its id as
-            // existingDeviceId and the server decides whether it is reusable.
-            await saveConfig({ ...paired, baseUrl, deviceToken: undefined });
-            process.stderr.write(
-              "Device authorization was revoked. The saved device token was cleared. Run remote again to approve this computer; its device id is kept when the server still accepts it.\n",
-            );
-          } catch (error) {
-            process.stderr.write(
-              `Device authorization was revoked, but saved credentials could not be cleared: ${error.message}\n`,
-            );
-          } finally {
-            stop();
-          }
-        })();
-      });
-      controller.signal.throwIfAborted();
-      agent.start();
-      await new Promise((resolve) => {
-        controller.signal.addEventListener("abort", resolve, { once: true });
-      });
     } catch (error) {
       if (!controller.signal.aborted) throw error;
     } finally {
-      try {
-        await agent?.shutdown();
-      } finally {
-        process.removeListener("SIGINT", stop);
-        process.removeListener("SIGTERM", stop);
-      }
+      process.removeListener("SIGINT", stop);
+      process.removeListener("SIGTERM", stop);
     }
     return;
   }

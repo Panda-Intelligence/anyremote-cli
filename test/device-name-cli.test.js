@@ -166,6 +166,7 @@ test("remote reauthorizes a saved device without overwriting its server name", a
       [
         binary,
         "remote",
+        "--reauth",
         "--base-url",
         baseUrl,
         "--name",
@@ -327,6 +328,7 @@ test("revoked remote credentials are cleared and the next remote enrolls again",
       [
         binary,
         "remote",
+        "--reauth",
         "--base-url",
         baseUrl,
         "--name",
