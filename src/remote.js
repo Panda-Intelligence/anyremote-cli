@@ -7,6 +7,22 @@ import { CLI_VERSION } from "./version.js";
 
 const CLIENT_ID = "anyremote-cli";
 
+/** Validate the same application-origin boundary for enrollment and resume. */
+export function applicationOrigin(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    if (
+      typeof baseUrl === "string" &&
+      ["http:", "https:"].includes(url.protocol) &&
+      baseUrl.replace(/\/$/, "") === url.origin
+    )
+      return url.origin;
+  } catch {
+    // Do not include the input: URLs may contain credentials.
+  }
+  throw new Error("Use the application origin as --base-url.");
+}
+
 /** 只领取设备范围的身份；账号会话和 enrollment token 不写入配置。 */
 export async function enrollRemoteDevice({
   baseUrl,
@@ -22,9 +38,7 @@ export async function enrollRemoteDevice({
   now = Date.now,
   enrollmentId = randomUUID(),
 } = {}) {
-  const origin = new URL(baseUrl).origin;
-  if (baseUrl.replace(/\/$/, "") !== origin)
-    throw new Error("Use the application origin as --base-url.");
+  const origin = applicationOrigin(baseUrl);
   const deviceName = await resolveDeviceName(name);
   async function request(path, body, token, form = false) {
     signal?.throwIfAborted();

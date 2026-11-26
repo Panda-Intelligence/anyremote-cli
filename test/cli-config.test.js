@@ -38,7 +38,7 @@ test("retired MCP bridge and setup commands are unavailable", async () => {
     const { stdout: help } = await run(process.execPath, [binary, "help"], {
       env,
     });
-    assert.match(help, /remote\s+Authorize and connect/);
+    assert.match(help, /remote\s+Resume or authorize and connect/);
     assert.doesNotMatch(help, /setup codex|setup claude-code|stdio MCP bridge/);
     for (const command of ["mcp", "setup"]) {
       await assert.rejects(
